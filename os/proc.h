@@ -9,6 +9,7 @@
 #define NTHREAD (16)
 #define FD_BUFFER_SIZE (16)
 #define LOCK_POOL_SIZE (8)
+#define MAX_SYSCALL_NUM (500)  /* ch3 */
 
 struct file;
 
@@ -71,6 +72,8 @@ struct proc {
 	int mutex_request[NTHREAD][LOCK_POOL_SIZE];
 	int sem_allocation[NTHREAD][LOCK_POOL_SIZE];
 	int sem_request[NTHREAD][LOCK_POOL_SIZE];
+	/* ch3: syscall trace */
+	int syscall_count[MAX_SYSCALL_NUM];
 };
 
 int cpuid();

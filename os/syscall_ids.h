@@ -306,3 +306,5 @@
 #define SYS_condvar_create 471
 #define SYS_condvar_signal 472
 #define SYS_condvar_wait 473
+#define SYS_trace 410  /* ch3 */
+#define SYS_sbrk 214   /* ch4 */

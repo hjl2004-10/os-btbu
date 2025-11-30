@@ -476,6 +476,32 @@ int sys_enable_deadlock_detect(int is_enable)
 	return 0;
 }
 
+/* ch3: sys_trace implementation */
+int sys_trace(int trace_request, uint64 id, uint8 data)
+{
+	struct proc *p = curr_proc();
+	if (trace_request == 0) {
+		/* read: read one byte from user address id */
+		uint8 *addr = (uint8 *)useraddr(p->pagetable, id);
+		if (addr == NULL)
+			return -1;
+		return *addr;
+	} else if (trace_request == 1) {
+		/* write: write data to user address id */
+		uint8 *addr = (uint8 *)useraddr(p->pagetable, id);
+		if (addr == NULL)
+			return -1;
+		*addr = data;
+		return 0;
+	} else if (trace_request == 2) {
+		/* count: return syscall count for syscall id */
+		if (id >= MAX_SYSCALL_NUM)
+			return -1;
+		return p->syscall_count[id];
+	}
+	return -1;
+}
+
 extern char trap_page[];
 
 void syscall()
@@ -484,6 +510,11 @@ void syscall()
 	int id = trapframe->a7, ret;
 	uint64 args[6] = { trapframe->a0, trapframe->a1, trapframe->a2,
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
+	/* ch3: count syscall before processing */
+	struct proc *p = curr_proc();
+	if (id >= 0 && id < MAX_SYSCALL_NUM) {
+		p->syscall_count[id]++;
+	}
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
 		debugf("syscall %d args = [%x, %x, %x, %x, %x, %x]", id,
 		       args[0], args[1], args[2], args[3], args[4], args[5]);
@@ -570,6 +601,10 @@ void syscall()
 	// LAB5: (2) you may need to add case SYS_enable_deadlock_detect here
 	case SYS_enable_deadlock_detect:
 		ret = sys_enable_deadlock_detect(args[0]);
+		break;
+	/* ch3: sys_trace */
+	case SYS_trace:
+		ret = sys_trace(args[0], args[1], args[2]);
 		break;
 	default:
 		ret = -1;

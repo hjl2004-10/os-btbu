@@ -148,6 +148,8 @@ found:
 	memset(p->mutex_request, 0, sizeof(p->mutex_request));
 	memset(p->sem_allocation, 0, sizeof(p->sem_allocation));
 	memset(p->sem_request, 0, sizeof(p->sem_request));
+	/* ch3: initialize syscall count */
+	memset(p->syscall_count, 0, sizeof(p->syscall_count));
 	return p;
 }
 
