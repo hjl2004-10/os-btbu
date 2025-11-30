@@ -80,8 +80,9 @@ void mutex_unlock(struct mutex *m)
 			// Or we should give lock to next thread
 			t->state = RUNNABLE;
 			add_task(t);
-			// 锁传递给下一个线程，更新占有记录
+			// 锁传递给下一个线程，清除其请求，更新占有记录
 			p->mutex_allocation[curr_thread()->tid][id] = 0;
+			p->mutex_request[t->tid][id] = 0;
 			p->mutex_allocation[t->tid][id] = 1;
 			debugf("blocking mutex passed to thread %d", t->tid);
 		}
@@ -126,7 +127,8 @@ void semaphore_up(struct semaphore *s)
 		}
 		t->state = RUNNABLE;
 		add_task(t);
-		// 唤醒等待者，视为其获得了资源
+		// 唤醒等待者，清除其请求，视为其获得了资源
+		p->sem_request[t->tid][id] = 0;
 		p->sem_allocation[t->tid][id]++;
 		debugf("semaphore up and notify another task");
 	}

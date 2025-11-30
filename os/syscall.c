@@ -261,7 +261,7 @@ int deadlock_detect(struct proc *p)
 	for (i = 0; i < LOCK_POOL_SIZE; i++) {
 		// 如果 mutex 被锁住，则可用资源为 0，否则为 1
 		work_mutex[i] = p->mutex_pool[i].locked ? 0 : 1;
-		// 信号量的可用资源即为其 count 值（若大于0）
+		// 信号量的可用资源：count >= 0 时为 count，count < 0 时为 0
 		work_sem[i] = p->semaphore_pool[i].count > 0 ?
 				      p->semaphore_pool[i].count :
 				      0;

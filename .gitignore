@@ -11,3 +11,7 @@ kernel_app.ld
 *.d
 *.asm
 *.sym
+nfs/fs
+nfs/fs.img
+nfs/fs-copy.img
+os/initproc.S
