@@ -14,6 +14,7 @@ int uvmmap(pagetable_t pagetable, uint64 va, uint64 npages, int perm);
 void uvmunmap(pagetable_t, uint64, uint64, int);
 uint64 walkaddr(pagetable_t, uint64);
 uint64 useraddr(pagetable_t, uint64);
+pte_t *walk(pagetable_t, uint64, int);  /* ch4: 页表遍历函数 */
 int copyout(pagetable_t, uint64, char *, uint64);
 int copyin(pagetable_t, char *, uint64, uint64);
 int copyinstr(pagetable_t, char *, uint64, uint64);

@@ -148,7 +148,7 @@ found:
 	memset(p->mutex_request, 0, sizeof(p->mutex_request));
 	memset(p->sem_allocation, 0, sizeof(p->sem_allocation));
 	memset(p->sem_request, 0, sizeof(p->sem_request));
-	/* ch3: initialize syscall count */
+	/* ch3: 初始化系统调用计数 */
 	memset(p->syscall_count, 0, sizeof(p->syscall_count));
 	return p;
 }

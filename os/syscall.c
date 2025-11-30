@@ -476,30 +476,123 @@ int sys_enable_deadlock_detect(int is_enable)
 	return 0;
 }
 
-/* ch3: sys_trace implementation */
+/* ch3: 系统调用追踪 */
+/* ch4: 更新以检查虚存读写权限 */
 int sys_trace(int trace_request, uint64 id, uint8 data)
 {
 	struct proc *p = curr_proc();
 	if (trace_request == 0) {
-		/* read: read one byte from user address id */
+		/* ch4: 读操作 - 检查地址是否用户可见且可读 */
+		pte_t *pte = walk(p->pagetable, id, 0);
+		if (pte == NULL || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_R) == 0)
+			return -1;
 		uint8 *addr = (uint8 *)useraddr(p->pagetable, id);
 		if (addr == NULL)
 			return -1;
 		return *addr;
 	} else if (trace_request == 1) {
-		/* write: write data to user address id */
+		/* ch4: 写操作 - 检查地址是否用户可见且可写 */
+		pte_t *pte = walk(p->pagetable, id, 0);
+		if (pte == NULL || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_W) == 0)
+			return -1;
 		uint8 *addr = (uint8 *)useraddr(p->pagetable, id);
 		if (addr == NULL)
 			return -1;
 		*addr = data;
 		return 0;
 	} else if (trace_request == 2) {
-		/* count: return syscall count for syscall id */
+		/* ch3: 返回指定syscall的调用次数 */
 		if (id >= MAX_SYSCALL_NUM)
 			return -1;
 		return p->syscall_count[id];
 	}
 	return -1;
+}
+
+/* ch4: sys_mmap - 匿名内存映射 */
+int sys_mmap(uint64 start, uint64 len, int prot, int flags)
+{
+	struct proc *p = curr_proc();
+
+	/* ch4: 检查起始地址页对齐 */
+	if (!PGALIGNED(start))
+		return -1;
+
+	/* ch4: 检查prot有效性：其他位必须为0 */
+	if ((prot & ~0x7) != 0)
+		return -1;
+
+	/* ch4: 检查prot至少有一个权限(R/W/X) */
+	if ((prot & 0x7) == 0)
+		return -1;
+
+	/* ch4: len为0时直接返回成功 */
+	if (len == 0)
+		return 0;
+
+	/* ch4: 将len向上取整到页边界 */
+	uint64 npages = (len + PGSIZE - 1) / PGSIZE;
+
+	/* ch4: 检查[start, start+len)是否已被映射 */
+	for (uint64 va = start; va < start + npages * PGSIZE; va += PGSIZE) {
+		pte_t *pte = walk(p->pagetable, va, 0);
+		if (pte != NULL && (*pte & PTE_V) != 0)
+			return -1;  /* 已被映射 */
+	}
+
+	/* ch4: 将prot转换为PTE标志位
+	 * prot bit 0 = read  -> PTE_R (bit 1)
+	 * prot bit 1 = write -> PTE_W (bit 2)
+	 * prot bit 2 = exec  -> PTE_X (bit 3)
+	 */
+	int perm = PTE_U;  /* 用户可访问 */
+	if (prot & 0x1) perm |= PTE_R;
+	if (prot & 0x2) perm |= PTE_W;
+	if (prot & 0x4) perm |= PTE_X;
+
+	/* ch4: 逐页映射（kalloc不支持连续分配） */
+	for (uint64 i = 0; i < npages; i++) {
+		uint64 va = start + i * PGSIZE;
+		char *mem = kalloc();
+		if (mem == NULL)
+			return -1;  /* 内存不足，简化处理不回滚 */
+		memset(mem, 0, PGSIZE);
+		if (mappages(p->pagetable, va, PGSIZE, (uint64)mem, perm) != 0) {
+			kfree(mem);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+/* ch4: sys_munmap - 取消内存映射 */
+int sys_munmap(uint64 start, uint64 len)
+{
+	struct proc *p = curr_proc();
+
+	/* ch4: 检查起始地址页对齐 */
+	if (!PGALIGNED(start))
+		return -1;
+
+	/* ch4: len为0时直接返回成功 */
+	if (len == 0)
+		return 0;
+
+	/* ch4: 将len向上取整到页边界 */
+	uint64 npages = (len + PGSIZE - 1) / PGSIZE;
+
+	/* ch4: 检查[start, start+len)是否全部已映射 */
+	for (uint64 va = start; va < start + npages * PGSIZE; va += PGSIZE) {
+		pte_t *pte = walk(p->pagetable, va, 0);
+		if (pte == NULL || (*pte & PTE_V) == 0)
+			return -1;  /* 未映射 */
+	}
+
+	/* ch4: 取消映射并释放页面 */
+	uvmunmap(p->pagetable, start, npages, 1);
+
+	return 0;
 }
 
 extern char trap_page[];
@@ -510,7 +603,7 @@ void syscall()
 	int id = trapframe->a7, ret;
 	uint64 args[6] = { trapframe->a0, trapframe->a1, trapframe->a2,
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
-	/* ch3: count syscall before processing */
+	/* ch3: 在处理前统计系统调用次数 */
 	struct proc *p = curr_proc();
 	if (id >= 0 && id < MAX_SYSCALL_NUM) {
 		p->syscall_count[id]++;
@@ -602,9 +695,16 @@ void syscall()
 	case SYS_enable_deadlock_detect:
 		ret = sys_enable_deadlock_detect(args[0]);
 		break;
-	/* ch3: sys_trace */
+	/* ch3: 系统调用追踪 */
 	case SYS_trace:
 		ret = sys_trace(args[0], args[1], args[2]);
+		break;
+	/* ch4: 内存映射系统调用 */
+	case SYS_mmap:
+		ret = sys_mmap(args[0], args[1], args[2], args[3]);
+		break;
+	case SYS_munmap:
+		ret = sys_munmap(args[0], args[1]);
 		break;
 	default:
 		ret = -1;
