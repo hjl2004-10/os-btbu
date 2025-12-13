@@ -5,6 +5,7 @@
 build
 target
 /user
+/doc
 link_app.S
 kernel_app.ld
 *.o

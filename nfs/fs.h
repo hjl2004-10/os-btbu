@@ -45,7 +45,8 @@ struct superblock {
 // 磁盘 inode 结构
 struct dinode {
 	short type; // 文件类型
-	short pad[3];
+	short nlink; /* ch6: 硬链接数量 */
+	short pad[2];
 	uint size; // 文件大小（字节）
 	uint addrs[NDIRECT + 1]; // 数据块地址
 };

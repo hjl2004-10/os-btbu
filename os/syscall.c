@@ -664,6 +664,140 @@ int sys_set_priority(long long prio)
 	return prio;
 }
 
+/* ch6: Stat结构体定义 */
+#define S_IFDIR 0x040000   /* directory */
+#define S_IFREG 0x100000   /* regular file */
+
+struct Stat {
+	uint64 dev;     /* 设备号 */
+	uint64 ino;     /* inode编号 */
+	uint32 mode;    /* 文件类型 */
+	uint32 nlink;   /* 硬链接数量 */
+	uint64 pad[7];  /* 填充 */
+};
+
+/* ch6: sys_linkat - 创建硬链接 */
+int sys_linkat(int olddirfd, uint64 oldpath_va, int newdirfd, uint64 newpath_va, uint flags)
+{
+	struct proc *p = curr_proc();
+	char oldpath[MAX_STR_LEN], newpath[MAX_STR_LEN];
+	struct inode *ip, *dp;
+
+	/* ch6: 从用户空间拷贝路径 */
+	if (copyinstr(p->pagetable, oldpath, oldpath_va, MAX_STR_LEN) < 0)
+		return -1;
+	if (copyinstr(p->pagetable, newpath, newpath_va, MAX_STR_LEN) < 0)
+		return -1;
+
+	/* ch6: 新旧路径相同则返回错误 */
+	if (strncmp(oldpath, newpath, MAX_STR_LEN) == 0)
+		return -1;
+
+	/* ch6: 查找源文件 */
+	if ((ip = namei(oldpath)) == NULL)
+		return -1;
+	ivalid(ip);
+
+	/* ch6: 不能对目录创建硬链接 */
+	if (ip->type == T_DIR) {
+		iput(ip);
+		return -1;
+	}
+
+	/* ch6: 增加链接计数 */
+	ip->nlink++;
+	iupdate(ip);
+
+	/* ch6: 在根目录中添加新的目录项 */
+	dp = root_dir();
+	if (dirlink(dp, newpath, ip->inum) < 0) {
+		/* ch6: 添加失败，恢复链接计数 */
+		ip->nlink--;
+		iupdate(ip);
+		iput(ip);
+		iput(dp);
+		return -1;
+	}
+
+	iput(dp);
+	iput(ip);
+	return 0;
+}
+
+/* ch6: sys_unlinkat - 删除硬链接 */
+int sys_unlinkat(int dirfd, uint64 path_va, uint flags)
+{
+	struct proc *p = curr_proc();
+	char path[MAX_STR_LEN];
+	struct inode *ip, *dp;
+
+	/* ch6: 从用户空间拷贝路径 */
+	if (copyinstr(p->pagetable, path, path_va, MAX_STR_LEN) < 0)
+		return -1;
+
+	/* ch6: 查找文件 */
+	if ((ip = namei(path)) == NULL)
+		return -1;
+	ivalid(ip);
+
+	/* ch6: 不能删除目录（简化实现） */
+	if (ip->type == T_DIR) {
+		iput(ip);
+		return -1;
+	}
+
+	/* ch6: 从根目录中删除目录项 */
+	dp = root_dir();
+	if (dirunlink(dp, path) < 0) {
+		iput(ip);
+		iput(dp);
+		return -1;
+	}
+	iput(dp);
+
+	/* ch6: 减少链接计数 */
+	ip->nlink--;
+	iupdate(ip);
+	iput(ip);  /* ch6: 如果nlink为0，iput会释放inode */
+
+	return 0;
+}
+
+/* ch6: sys_fstat - 获取文件状态 */
+int sys_fstat(int fd, uint64 st_va)
+{
+	struct proc *p = curr_proc();
+	struct Stat st;
+
+	/* ch6: 检查fd有效性 */
+	if (fd < 0 || fd >= FD_BUFFER_SIZE)
+		return -1;
+
+	struct file *f = p->files[fd];
+	if (f == NULL)
+		return -1;
+
+	/* ch6: 只支持inode类型的文件 */
+	if (f->type != FD_INODE)
+		return -1;
+
+	struct inode *ip = f->ip;
+	ivalid(ip);
+
+	/* ch6: 填充Stat结构体 */
+	memset(&st, 0, sizeof(st));
+	st.dev = 0;  /* 设备号写死为0 */
+	st.ino = ip->inum;
+	st.mode = (ip->type == T_DIR) ? S_IFDIR : S_IFREG;
+	st.nlink = ip->nlink;
+
+	/* ch6: 拷贝到用户空间 */
+	if (copyout(p->pagetable, st_va, (char *)&st, sizeof(st)) < 0)
+		return -1;
+
+	return 0;
+}
+
 extern char trap_page[];
 
 void syscall()
@@ -782,6 +916,16 @@ void syscall()
 	/* ch5: 设置优先级系统调用 */
 	case SYS_setpriority:
 		ret = sys_set_priority(args[0]);
+		break;
+	/* ch6: 硬链接相关系统调用 */
+	case SYS_linkat:
+		ret = sys_linkat(args[0], args[1], args[2], args[3], args[4]);
+		break;
+	case SYS_unlinkat:
+		ret = sys_unlinkat(args[0], args[1], args[2]);
+		break;
+	case SYS_fstat:
+		ret = sys_fstat(args[0], args[1]);
 		break;
 	default:
 		ret = -1;

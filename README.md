@@ -21,4 +21,11 @@
 - 实现 ch5 sys_set_priority 系统调用（设置进程优先级）
 - 实现 stride 调度算法（基于优先级的进程调度，优先级越高获得CPU时间越多）
 - 通过 ch5b_usertest 和 ch5t_usertest 全部测试
+- 实现 ch6 sys_linkat 系统调用（创建硬链接）
+- 实现 ch6 sys_unlinkat 系统调用（删除硬链接）
+- 实现 ch6 sys_fstat 系统调用（获取文件状态信息）
+- 为 inode 添加 nlink 字段支持硬链接计数
+- 修复 freewalk 函数以支持 mmap 区域的正确清理
+- 通过 ch6b_usertest 和 ch6_usertest 全部测试
+- 添加 ch3-ch6 教学文档（doc/目录）
 

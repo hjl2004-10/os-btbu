@@ -203,8 +203,8 @@ uint ialloc(ushort type)
 
 	bzero(&din, sizeof(din));
 	din.type = xshort(type);
+	din.nlink = xshort(1); /* ch6: 初始化链接计数为1 */
 	din.size = xint(0);
-	// LAB4: 你可能想在这里初始化链接计数
 	winode(inum, &din);
 	return inum;
 }

@@ -195,7 +195,7 @@ pagetable_t uvmcreate()
 }
 
 // Recursively free page-table pages.
-// All leaf mappings must already have been removed.
+/* ch4: 修改为同时释放叶子页面，支持mmap区域的清理 */
 void freewalk(pagetable_t pagetable)
 {
 	// there are 2^9 = 512 PTEs in a page table.
@@ -207,7 +207,10 @@ void freewalk(pagetable_t pagetable)
 			freewalk((pagetable_t)child);
 			pagetable[i] = 0;
 		} else if (pte & PTE_V) {
-			panic("freewalk: leaf");
+			/* ch4: 释放叶子页面的物理内存 */
+			uint64 pa = PTE2PA(pte);
+			kfree((void *)pa);
+			pagetable[i] = 0;
 		}
 	}
 	kfree((void *)pagetable);
