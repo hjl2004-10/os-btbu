@@ -595,6 +595,75 @@ int sys_munmap(uint64 start, uint64 len)
 	return 0;
 }
 
+/* ch5: sys_spawn - 创建新进程并执行程序 */
+int sys_spawn(uint64 path_va)
+{
+	struct proc *p = curr_proc();
+	char path[MAX_STR_LEN];
+	struct inode *ip;
+	struct proc *np;
+	int i;
+
+	/* ch5: 从用户空间拷贝路径名 */
+	if (copyinstr(p->pagetable, path, path_va, MAX_STR_LEN) < 0)
+		return -1;
+
+	/* ch5: 查找可执行文件 */
+	if ((ip = namei(path)) == NULL) {
+		errorf("spawn: invalid file name %s\n", path);
+		return -1;
+	}
+
+	/* ch5: 分配新进程 */
+	if ((np = allocproc()) == NULL) {
+		iput(ip);
+		return -1;
+	}
+
+	/* ch5: 设置父进程 */
+	np->parent = p;
+
+	/* ch5: 初始化标准IO */
+	init_stdio(np);
+
+	/* ch5: 复制父进程的文件描述符表(跳过stdio) */
+	for (i = 3; i < FD_BUFFER_SIZE; i++) {
+		if (p->files[i] != NULL) {
+			p->files[i]->ref++;
+			np->files[i] = p->files[i];
+		}
+	}
+
+	/* ch5: 加载可执行文件 */
+	bin_loader(ip, np);
+	iput(ip);
+
+	/* ch5: 设置命令行参数 */
+	char *argv[2];
+	argv[0] = path;
+	argv[1] = NULL;
+	struct thread *nt = &np->threads[0];
+	nt->trapframe->a0 = push_argv(np, argv);
+
+	/* ch5: 将新进程加入调度队列 */
+	nt->state = RUNNABLE;
+	add_task(nt);
+
+	return np->pid;
+}
+
+/* ch5: sys_set_priority - 设置进程优先级 */
+int sys_set_priority(long long prio)
+{
+	/* ch5: 优先级必须 >= 2 */
+	if (prio < 2)
+		return -1;
+
+	struct proc *p = curr_proc();
+	p->priority = prio;
+	return prio;
+}
+
 extern char trap_page[];
 
 void syscall()
@@ -705,6 +774,14 @@ void syscall()
 		break;
 	case SYS_munmap:
 		ret = sys_munmap(args[0], args[1]);
+		break;
+	/* ch5: spawn系统调用 */
+	case SYS_spawn:
+		ret = sys_spawn(args[0]);
+		break;
+	/* ch5: 设置优先级系统调用 */
+	case SYS_setpriority:
+		ret = sys_set_priority(args[0]);
 		break;
 	default:
 		ret = -1;

@@ -74,6 +74,9 @@ struct proc {
 	int sem_request[NTHREAD][LOCK_POOL_SIZE];
 	/* ch3: 系统调用计数数组 */
 	int syscall_count[MAX_SYSCALL_NUM];
+	/* ch5: stride调度算法所需字段 */
+	uint64 stride;    /* 当前已运行的"长度" */
+	uint64 priority;  /* 进程优先级，默认16 */
 };
 
 int cpuid();

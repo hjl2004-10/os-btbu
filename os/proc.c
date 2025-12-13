@@ -93,18 +93,68 @@ int task_to_id(struct thread *t)
 	return task_id;
 }
 
+/* ch5: BIG_STRIDE常量，用于计算pass值 */
+#define BIG_STRIDE 65536
+
+/* ch5: 从任务队列中获取stride最小的任务 */
 struct thread *fetch_task()
 {
-	int index = pop_queue(&task_queue);
-	struct thread *t = id_to_task(index);
-	if (t == NULL) {
-		debugf("No task to fetch\n");
-		return t;
+	if (task_queue.empty)
+		return NULL;
+
+	/* ch5: 暴力扫描找stride最小的任务 */
+	int min_idx = -1;
+	uint64 min_stride = (uint64)-1;  /* 最大值 */
+	int count = 0;
+
+	/* ch5: 计算队列中的元素数量 */
+	if (task_queue.front <= task_queue.tail && !task_queue.empty) {
+		count = task_queue.tail - task_queue.front;
+	} else {
+		count = task_queue.size - task_queue.front + task_queue.tail;
 	}
-	int tid = t->tid;
-	int pid = t->process->pid;
-	tracef("fetch index %d(pid=%d, tid=%d, addr=%p) from task queue", index,
-	       pid, tid, (uint64)t);
+	if (task_queue.empty)
+		count = 0;
+
+	/* ch5: 遍历队列找stride最小的 */
+	for (int i = 0; i < count; i++) {
+		int idx = (task_queue.front + i) % task_queue.size;
+		int task_id = task_queue.data[idx];
+		struct thread *t = id_to_task(task_id);
+		if (t == NULL || t->state != RUNNABLE)
+			continue;
+
+		uint64 stride = t->process->stride;
+		if (stride < min_stride) {
+			min_stride = stride;
+			min_idx = idx;
+		}
+	}
+
+	if (min_idx == -1) {
+		/* ch5: 没找到可运行的任务，按原方式返回 */
+		int index = pop_queue(&task_queue);
+		return id_to_task(index);
+	}
+
+	/* ch5: 从队列中移除选中的任务 */
+	int task_id = task_queue.data[min_idx];
+	/* ch5: 将后面的元素前移 */
+	for (int i = min_idx; i != (task_queue.tail - 1 + task_queue.size) % task_queue.size;
+	     i = (i + 1) % task_queue.size) {
+		task_queue.data[i] = task_queue.data[(i + 1) % task_queue.size];
+	}
+	task_queue.tail = (task_queue.tail - 1 + task_queue.size) % task_queue.size;
+	if (task_queue.front == task_queue.tail)
+		task_queue.empty = 1;
+
+	struct thread *t = id_to_task(task_id);
+	if (t != NULL) {
+		/* ch5: 更新stride: stride += BIG_STRIDE / priority */
+		t->process->stride += BIG_STRIDE / t->process->priority;
+		tracef("fetch task pid=%d, tid=%d, stride=%d",
+		       t->process->pid, t->tid, t->process->stride);
+	}
 	return t;
 }
 
@@ -150,6 +200,9 @@ found:
 	memset(p->sem_request, 0, sizeof(p->sem_request));
 	/* ch3: 初始化系统调用计数 */
 	memset(p->syscall_count, 0, sizeof(p->syscall_count));
+	/* ch5: 初始化stride调度字段 */
+	p->stride = 0;
+	p->priority = 16;  /* 默认优先级为16 */
 	return p;
 }
 

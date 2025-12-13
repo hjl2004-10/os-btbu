@@ -16,3 +16,9 @@
 - 修复 sys_trace 虚存权限检查（读操作检查PTE_R，写操作检查PTE_W）
 - 修复死锁检测算法的竞态条件问题
 
+### 2025-12-13
+- 实现 ch5 sys_spawn 系统调用（创建新进程并执行程序，相当于fork+exec但不复制内存）
+- 实现 ch5 sys_set_priority 系统调用（设置进程优先级）
+- 实现 stride 调度算法（基于优先级的进程调度，优先级越高获得CPU时间越多）
+- 通过 ch5b_usertest 和 ch5t_usertest 全部测试
+
