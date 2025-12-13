@@ -28,4 +28,9 @@
 - 修复 freewalk 函数以支持 mmap 区域的正确清理
 - 通过 ch6b_usertest 和 ch6_usertest 全部测试
 - 添加 ch3-ch6 教学文档（doc/目录）
+- 添加 ch9 TCP/IP 网络协议栈（移植自 xv6-riscv-net/microps）
+  - 支持以太网、ARP、IP、ICMP、UDP、TCP 协议
+  - VirtIO 网络设备驱动（QEMU virtio-net-device）
+  - 完整的 TCP 状态机实现
+  - 为后续实现 HTTP 客户端调用 AI API 做准备
 
