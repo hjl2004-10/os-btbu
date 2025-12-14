@@ -77,6 +77,65 @@ build_chat_request(const char *prompt, char *buf, int bufsize)
     return len;
 }
 
+/* ch9: 解析十六进制字符 */
+static int
+hex_digit(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* ch9: 解析\uXXXX为Unicode码点 */
+static int
+parse_unicode_escape(const char *p, uint32 *codepoint)
+{
+    int i;
+    uint32 val = 0;
+    for (i = 0; i < 4; i++) {
+        int d = hex_digit(p[i]);
+        if (d < 0) return -1;
+        val = (val << 4) | d;
+    }
+    *codepoint = val;
+    return 0;
+}
+
+/* ch9: 将Unicode码点编码为UTF-8，返回写入的字节数 */
+static int
+encode_utf8(uint32 codepoint, char *buf, int bufsize)
+{
+    if (codepoint < 0x80) {
+        /* 1字节: 0xxxxxxx */
+        if (bufsize < 1) return 0;
+        buf[0] = (char)codepoint;
+        return 1;
+    } else if (codepoint < 0x800) {
+        /* 2字节: 110xxxxx 10xxxxxx */
+        if (bufsize < 2) return 0;
+        buf[0] = (char)(0xC0 | (codepoint >> 6));
+        buf[1] = (char)(0x80 | (codepoint & 0x3F));
+        return 2;
+    } else if (codepoint < 0x10000) {
+        /* 3字节: 1110xxxx 10xxxxxx 10xxxxxx */
+        if (bufsize < 3) return 0;
+        buf[0] = (char)(0xE0 | (codepoint >> 12));
+        buf[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        buf[2] = (char)(0x80 | (codepoint & 0x3F));
+        return 3;
+    } else if (codepoint < 0x110000) {
+        /* 4字节: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx */
+        if (bufsize < 4) return 0;
+        buf[0] = (char)(0xF0 | (codepoint >> 18));
+        buf[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+        buf[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        buf[3] = (char)(0x80 | (codepoint & 0x3F));
+        return 4;
+    }
+    return 0;
+}
+
 /* 从JSON响应中提取content字段 */
 static int
 extract_content(const char *json, char *content, int content_size)
@@ -99,13 +158,37 @@ extract_content(const char *json, char *content, int content_size)
     p++;
 
     /* 提取内容直到结束引号 */
-    while (*p && i < content_size - 1) {
+    while (*p && i < content_size - 4) {  /* 预留UTF-8最大4字节 */
         if (escape) {
             if (*p == 'n') content[i++] = '\n';
             else if (*p == 'r') content[i++] = '\r';
             else if (*p == 't') content[i++] = '\t';
             else if (*p == '"') content[i++] = '"';
             else if (*p == '\\') content[i++] = '\\';
+            else if (*p == 'u') {
+                /* ch9: 处理\uXXXX Unicode转义 */
+                uint32 codepoint;
+                if (parse_unicode_escape(p + 1, &codepoint) == 0) {
+                    /* 检查是否为UTF-16代理对的高位 (0xD800-0xDBFF) */
+                    if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
+                        /* 需要读取低位代理 \uDCxx-\uDFxx */
+                        if (p[5] == '\\' && p[6] == 'u') {
+                            uint32 low;
+                            if (parse_unicode_escape(p + 7, &low) == 0 &&
+                                low >= 0xDC00 && low <= 0xDFFF) {
+                                /* 组合成完整码点 */
+                                codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00);
+                                p += 6; /* 跳过额外的\uXXXX */
+                            }
+                        }
+                    }
+                    int utf8_len = encode_utf8(codepoint, content + i, content_size - i);
+                    i += utf8_len;
+                    p += 4; /* 跳过XXXX */
+                } else {
+                    content[i++] = 'u'; /* 解析失败，保留原字符 */
+                }
+            }
             else content[i++] = *p;
             escape = 0;
         } else if (*p == '\\') {
