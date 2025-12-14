@@ -21,32 +21,6 @@ strcasecmp_n(const char *s1, const char *s2, int n)
     return 0;
 }
 
-/* 查找字符串 */
-static char *
-strstr_simple(const char *haystack, const char *needle)
-{
-    if (!*needle) return (char *)haystack;
-    for (; *haystack; haystack++) {
-        const char *h = haystack;
-        const char *n = needle;
-        while (*h && *n && *h == *n) {
-            h++;
-            n++;
-        }
-        if (!*n) return (char *)haystack;
-    }
-    return 0;
-}
-
-/* 字符串长度 */
-static int
-strlen_simple(const char *s)
-{
-    int len = 0;
-    while (*s++) len++;
-    return len;
-}
-
 /* 数字转字符串 */
 static int
 itoa_simple(int num, char *buf, int bufsize)
@@ -91,7 +65,7 @@ static int
 appendnum(char *buf, int pos, int bufsize, int num)
 {
     char tmp[16];
-    int len = itoa_simple(num, tmp, sizeof(tmp));
+    itoa_simple(num, tmp, sizeof(tmp));
     return strappend(buf, pos, bufsize, tmp);
 }
 
@@ -145,22 +119,25 @@ http_parse_url(const char *url, char *host, int host_size,
     return 0;
 }
 
-/* 解析IP地址字符串 */
+/* 解析IP地址字符串 - 返回网络字节序（与ip_addr_pton一致） */
 static ip_addr_t
 parse_ip(const char *s)
 {
-    uint32 a = 0, b = 0, c = 0, d = 0;
-    const char *p = s;
+    ip_addr_t addr;
+    uint8 *p = (uint8 *)&addr;
+    const char *sp = s;
+    int i;
 
-    while (*p >= '0' && *p <= '9') { a = a * 10 + (*p - '0'); p++; }
-    if (*p == '.') p++;
-    while (*p >= '0' && *p <= '9') { b = b * 10 + (*p - '0'); p++; }
-    if (*p == '.') p++;
-    while (*p >= '0' && *p <= '9') { c = c * 10 + (*p - '0'); p++; }
-    if (*p == '.') p++;
-    while (*p >= '0' && *p <= '9') { d = d * 10 + (*p - '0'); p++; }
-
-    return (a << 24) | (b << 16) | (c << 8) | d;
+    for (i = 0; i < 4; i++) {
+        int val = 0;
+        while (*sp >= '0' && *sp <= '9') {
+            val = val * 10 + (*sp - '0');
+            sp++;
+        }
+        p[i] = (uint8)val;
+        if (*sp == '.') sp++;
+    }
+    return addr;
 }
 
 /* 构建HTTP请求 */
@@ -199,6 +176,13 @@ http_build_request(struct http_request *req, char *buf, int bufsize)
         len = strappend(buf, len, bufsize, "\r\n");
     }
 
+    /* ch9: Authorization头 */
+    if (req->authorization[0]) {
+        len = strappend(buf, len, bufsize, "Authorization: ");
+        len = strappend(buf, len, bufsize, req->authorization);
+        len = strappend(buf, len, bufsize, "\r\n");
+    }
+
     /* 空行 */
     len = strappend(buf, len, bufsize, "\r\n");
 
@@ -220,7 +204,6 @@ http_parse_response(const char *data, int datalen, struct http_response *resp)
     const char *p = data;
     const char *end = data + datalen;
     const char *line_end;
-    char *body_start;
 
     /* 初始化响应 */
     resp->status_code = 0;
@@ -318,7 +301,7 @@ http_execute(struct http_request *req, struct http_response *resp)
     }
 
     /* 解析主机名为IP（目前只支持直接IP地址） */
-    foreign.addr = hton32(parse_ip(req->host));
+    foreign.addr = parse_ip(req->host);  /* parse_ip已返回网络字节序 */
     foreign.port = hton16(req->port);
 
     /* 创建TCP连接 */
@@ -417,6 +400,44 @@ http_post(const char *url, const char *content_type,
     }
 
     debugf("http POST: host=%s, port=%d, path=%s", req.host, req.port, req.path);
+    return http_execute(&req, resp);
+}
+
+/* ch9: 带Authorization的HTTP POST请求 */
+int
+http_post_with_auth(const char *url, const char *content_type,
+                    const uint8 *body, int body_len,
+                    const char *auth, struct http_response *resp)
+{
+    struct http_request req;
+    int i;
+
+    memset(&req, 0, sizeof(req));
+    req.method = HTTP_METHOD_POST;
+    req.body = (char *)body;
+    req.body_len = body_len;
+
+    if (content_type) {
+        for (i = 0; content_type[i] && i < (int)sizeof(req.content_type) - 1; i++) {
+            req.content_type[i] = content_type[i];
+        }
+        req.content_type[i] = 0;
+    }
+
+    if (auth) {
+        for (i = 0; auth[i] && i < (int)sizeof(req.authorization) - 1; i++) {
+            req.authorization[i] = auth[i];
+        }
+        req.authorization[i] = 0;
+    }
+
+    if (http_parse_url(url, req.host, sizeof(req.host),
+                       &req.port, req.path, sizeof(req.path)) < 0) {
+        errorf("http: invalid URL: %s", url);
+        return -1;
+    }
+
+    debugf("http POST (auth): host=%s, port=%d, path=%s", req.host, req.port, req.path);
     return http_execute(&req, resp);
 }
 

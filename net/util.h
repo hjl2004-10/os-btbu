@@ -39,16 +39,26 @@
 
 /*
  * Logging
+ * 注意：如果已经通过platform.h包含了os/log.h，则使用os/log.h的定义
  */
 
+#ifndef errorf
 #define errorf(...) printf(__VA_ARGS__), printf("\n")
+#endif
+#ifndef warnf
 #define warnf(...) printf(__VA_ARGS__), printf("\n")
+#endif
+#ifndef infof
 #define infof(...) printf(__VA_ARGS__), printf("\n")
+#endif
+#ifndef debugf
 #ifdef NET_DEBUG
 #define debugf(...) printf(__VA_ARGS__), printf("\n")
-#define debugdump(...)
 #else
 #define debugf(...)
+#endif
+#endif
+#ifndef debugdump
 #define debugdump(...)
 #endif
 

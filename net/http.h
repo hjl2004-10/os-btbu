@@ -29,6 +29,7 @@ struct http_request {
     char *body;             /* 请求体 */
     int body_len;           /* 请求体长度 */
     char content_type[64];  /* Content-Type */
+    char authorization[256]; /* ch9: Authorization头 */
 };
 
 /*
@@ -44,6 +45,11 @@ int http_get(const char *url, struct http_response *resp);
 /* 创建HTTP POST请求 */
 int http_post(const char *url, const char *content_type,
               const uint8 *body, int body_len, struct http_response *resp);
+
+/* ch9: 带Authorization的HTTP POST请求 */
+int http_post_with_auth(const char *url, const char *content_type,
+                        const uint8 *body, int body_len,
+                        const char *auth, struct http_response *resp);
 
 /* 释放HTTP响应资源 */
 void http_response_free(struct http_response *resp);

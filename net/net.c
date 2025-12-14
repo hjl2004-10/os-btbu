@@ -35,6 +35,27 @@ static struct net_protocol *protocols;
 static struct net_timer *timers;
 static struct net_event *events;
 
+/* 简单的数字转字符串 */
+static int
+net_itoa(unsigned int num, char *buf)
+{
+    char tmp[12];
+    int i = 0, j = 0;
+    if (num == 0) {
+        buf[j++] = '0';
+    } else {
+        while (num > 0) {
+            tmp[i++] = '0' + (num % 10);
+            num /= 10;
+        }
+        while (i > 0) {
+            buf[j++] = tmp[--i];
+        }
+    }
+    buf[j] = '\0';
+    return j;
+}
+
 struct net_device *
 net_device_alloc(void)
 {
@@ -53,9 +74,14 @@ int
 net_device_register(struct net_device *dev)
 {
     static unsigned int index = 0;
+    int pos = 0;
 
     dev->index = index++;
-    snprintf(dev->name, sizeof(dev->name), "net%d", dev->index);
+    /* 构造设备名: net0, net1, ... */
+    dev->name[pos++] = 'n';
+    dev->name[pos++] = 'e';
+    dev->name[pos++] = 't';
+    pos += net_itoa(dev->index, dev->name + pos);
     dev->next = devices;
     devices = dev;
     infof("registered, dev=%s, type=0x%04x", dev->name, dev->type);

@@ -245,10 +245,15 @@ sched_ctx_destroy(struct sched_ctx *ctx)
     return 0;
 }
 
-/* 简化的sleep：使用忙等待（适用于内核网络操作） */
+/* ch9: 网络软中断处理函数声明 */
+extern int net_softirq_handler(void);
+extern int net_timer_handler(void);
+
+/* 简化的sleep：使用忙等待+轮询网络（适用于内核网络操作） */
 static inline int
 sched_sleep(struct sched_ctx *ctx, mutex_t *mutex, const struct timespec *abstime)
 {
+    int timeout_loops = 100000000; /* 超时计数器 */
     (void)abstime;
 
     if (ctx->interrupted) {
@@ -262,11 +267,27 @@ sched_sleep(struct sched_ctx *ctx, mutex_t *mutex, const struct timespec *abstim
     /* 释放锁后等待 */
     mutex_unlock(mutex);
 
-    /* 忙等待直到被唤醒或中断 */
-    while (!ctx->ready && !ctx->interrupted) {
+    /* 忙等待直到被唤醒或中断，同时处理网络事件 */
+    while (!ctx->ready && !ctx->interrupted && timeout_loops > 0) {
+        /* ch9: 开中断让网络中断能够到达 */
+        intr_on();
+
+        /* 处理网络软中断 */
+        if (net_pending & INTR_IRQ_SOFTIRQ) {
+            mutex_lock(&net_pendinglock);
+            net_pending &= ~INTR_IRQ_SOFTIRQ;
+            mutex_unlock(&net_pendinglock);
+            net_softirq_handler();
+        }
+
+        /* 处理定时器 */
+        net_timer_handler();
+
         __sync_synchronize();
-        /* 可以加入小延时减少CPU占用 */
+        timeout_loops--;
     }
+
+    intr_off();
 
     /* 重新获取锁 */
     mutex_lock(mutex);

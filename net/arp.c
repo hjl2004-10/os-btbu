@@ -57,8 +57,8 @@ static struct arp_cache caches[ARP_CACHE_SIZE];
 static void
 arp_cache_delete(struct arp_cache *cache)
 {
-    char addr1[IP_ADDR_STR_LEN];
-    char addr2[ETHER_ADDR_STR_LEN];
+    char addr1[IP_ADDR_STR_LEN] __attribute__((unused));
+    char addr2[ETHER_ADDR_STR_LEN] __attribute__((unused));
 
     debugf("DELETE: pa=%s, ha=%s", ip_addr_ntop(cache->pa, addr1, sizeof(addr1)), ether_addr_ntop(cache->ha, addr2, sizeof(addr2)));
     cache->state = ARP_CACHE_STATE_FREE;
@@ -101,8 +101,8 @@ static struct arp_cache *
 arp_cache_update(ip_addr_t pa, const uint8 *ha)
 {
     struct arp_cache *cache;
-    char addr1[IP_ADDR_STR_LEN];
-    char addr2[ETHER_ADDR_STR_LEN];
+    char addr1[IP_ADDR_STR_LEN] __attribute__((unused));
+    char addr2[ETHER_ADDR_STR_LEN] __attribute__((unused));
 
     cache = arp_cache_select(pa);
     if (!cache) {
@@ -120,8 +120,8 @@ static struct arp_cache *
 arp_cache_insert(ip_addr_t pa, const uint8 *ha)
 {
     struct arp_cache *cache;
-    char addr1[IP_ADDR_STR_LEN];
-    char addr2[ETHER_ADDR_STR_LEN];
+    char addr1[IP_ADDR_STR_LEN] __attribute__((unused));
+    char addr2[ETHER_ADDR_STR_LEN] __attribute__((unused));
 
     cache = arp_cache_alloc();
     if (!cache) {
@@ -219,8 +219,8 @@ int
 arp_resolve(struct net_iface *iface, ip_addr_t pa, uint8 *ha)
 {
     struct arp_cache *cache;
-    char addr1[IP_ADDR_STR_LEN];
-    char addr2[ETHER_ADDR_STR_LEN];
+    char addr1[IP_ADDR_STR_LEN] __attribute__((unused));
+    char addr2[ETHER_ADDR_STR_LEN] __attribute__((unused));
 
     if (iface->dev->type != NET_DEVICE_TYPE_ETHERNET) {
         debugf("unsupported hardware address type");

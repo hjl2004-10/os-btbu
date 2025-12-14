@@ -17,9 +17,12 @@
 #define VIRTIO_MMIO_VENDOR_ID       0x00c
 #define VIRTIO_MMIO_DEVICE_FEATURES 0x010
 #define VIRTIO_MMIO_DRIVER_FEATURES 0x020
+#define VIRTIO_MMIO_GUEST_PAGE_SIZE 0x028  /* ch9: legacy模式需要 */
 #define VIRTIO_MMIO_QUEUE_SEL       0x030
 #define VIRTIO_MMIO_QUEUE_NUM_MAX   0x034
 #define VIRTIO_MMIO_QUEUE_NUM       0x038
+#define VIRTIO_MMIO_QUEUE_ALIGN     0x03c  /* ch9: legacy模式需要 */
+#define VIRTIO_MMIO_QUEUE_PFN       0x040  /* ch9: legacy模式需要 */
 #define VIRTIO_MMIO_QUEUE_READY     0x044
 #define VIRTIO_MMIO_QUEUE_NOTIFY    0x050
 #define VIRTIO_MMIO_INTERRUPT_STATUS 0x060
@@ -89,14 +92,15 @@ struct virtq_used {
     struct virtq_used_elem ring[NUM];
 };
 
-/* VirtIO队列 */
+/* VirtIO队列 - legacy模式使用连续内存 */
 struct virtq {
+    char pages[2 * PGSIZE] __attribute__((aligned(PGSIZE)));
     struct virtq_desc *desc;
     struct virtq_avail *avail;
     struct virtq_used *used;
     int num;
     int last_used_idx;
-    char *free;
+    char free[NUM];
 };
 
 /* VirtIO网络头 */
@@ -135,7 +139,7 @@ static struct virtio_net _nic0;
 
 #define PRIV(x) ((struct virtio_net *)(x)->priv)
 
-/* 初始化VirtIO队列 */
+/* 初始化VirtIO队列 - legacy模式 */
 static void
 virtq_init(struct virtq *vq, int sel, int num)
 {
@@ -144,47 +148,29 @@ virtq_init(struct virtq *vq, int sel, int num)
     /* select queue */
     *R(VIRTIO_MMIO_QUEUE_SEL) = sel;
 
-    /* ensure selected queue is not in use */
-    if (*R(VIRTIO_MMIO_QUEUE_READY)) {
-        panic("virtio_net: queue already in use");
-    }
-
     /* check maximum queue size */
     max = *R(VIRTIO_MMIO_QUEUE_NUM_MAX);
     if (max == 0) {
         panic("virtio_net: queue not available");
     }
-    if (max < num) {
+    if (max < (uint32)num) {
         panic("virtio_net: queue too short");
     }
 
-    /* allocate and zero queue memory */
-    vq->desc = kalloc();
-    vq->avail = kalloc();
-    vq->used = kalloc();
-    vq->free = kalloc();
-    if (!vq->desc || !vq->avail || !vq->used || !vq->free) {
-        panic("virtio_net: kalloc failed");
-    }
-    memset(vq->desc, 0, PGSIZE);
-    memset(vq->avail, 0, PGSIZE);
-    memset(vq->used, 0, PGSIZE);
-    memset(vq->free, 0, PGSIZE);
-
     /* set queue size */
     vq->num = num;
-    *R(VIRTIO_MMIO_QUEUE_NUM) = vq->num;
+    *R(VIRTIO_MMIO_QUEUE_NUM) = num;
 
-    /* write physical addresses */
-    *R(VIRTIO_MMIO_QUEUE_DESC_LOW) = (uint64)vq->desc;
-    *R(VIRTIO_MMIO_QUEUE_DESC_HIGH) = (uint64)vq->desc >> 32;
-    *R(VIRTIO_MMIO_DRIVER_DESC_LOW) = (uint64)vq->avail;
-    *R(VIRTIO_MMIO_DRIVER_DESC_HIGH) = (uint64)vq->avail >> 32;
-    *R(VIRTIO_MMIO_DEVICE_DESC_LOW) = (uint64)vq->used;
-    *R(VIRTIO_MMIO_DEVICE_DESC_HIGH) = (uint64)vq->used >> 32;
+    /* ch9: legacy模式 - 使用连续内存和QUEUE_PFN */
+    memset(vq->pages, 0, sizeof(vq->pages));
 
-    /* queue is ready */
-    *R(VIRTIO_MMIO_QUEUE_READY) = 1;
+    /* 设置队列物理页帧号 */
+    *R(VIRTIO_MMIO_QUEUE_PFN) = ((uint64)vq->pages) >> PGSHIFT;
+
+    /* legacy模式内存布局: desc在开始, avail紧随其后, used在第二页 */
+    vq->desc = (struct virtq_desc *)vq->pages;
+    vq->avail = (struct virtq_avail *)(vq->pages + NUM * sizeof(struct virtq_desc));
+    vq->used = (struct virtq_used *)(vq->pages + PGSIZE);
 
     /* all descriptors start out unused */
     for (int i = 0; i < vq->num; i++) {
@@ -413,12 +399,20 @@ virtio_net_init(void)
 
     mutex_init(&nic->lock);
 
+    /* ch9: 调试输出，检测设备 */
+    printf("virtio-net: probing at 0x%lx\n", (uint64)VIRTIO1);
+    printf("virtio-net: magic=0x%x, version=%d, device_id=%d, vendor=0x%x\n",
+          *R(VIRTIO_MMIO_MAGIC_VALUE),
+          *R(VIRTIO_MMIO_VERSION),
+          *R(VIRTIO_MMIO_DEVICE_ID),
+          *R(VIRTIO_MMIO_VENDOR_ID));
+
     /* find virtio-net device */
     if (*R(VIRTIO_MMIO_MAGIC_VALUE) != 0x74726976 ||
-        *R(VIRTIO_MMIO_VERSION) != 2 ||
+        (*R(VIRTIO_MMIO_VERSION) != 1 && *R(VIRTIO_MMIO_VERSION) != 2) ||
         *R(VIRTIO_MMIO_DEVICE_ID) != 1 || /* network device */
         *R(VIRTIO_MMIO_VENDOR_ID) != 0x554d4551) {
-        infof("virtio-net: device not found");
+        printf("virtio-net: device not found\n");
         return;
     }
 
@@ -440,17 +434,14 @@ virtio_net_init(void)
     nic->features = *R(VIRTIO_MMIO_DEVICE_FEATURES);
     nic->features &= ~(1ULL << VIRTIO_RING_F_EVENT_IDX);
     nic->features &= ~(1ULL << VIRTIO_NET_F_CSUM);
-    nic->features |= (1ULL << VIRTIO_NET_F_GUEST_CSUM);
     *R(VIRTIO_MMIO_DRIVER_FEATURES) = nic->features;
 
-    /* tell device that feature negotiation is complete */
-    nic->status |= VIRTIO_CONFIG_S_FEATURES_OK;
-    *R(VIRTIO_MMIO_STATUS) = nic->status;
+    /* ch9: legacy模式 - 设置页大小，然后直接设置DRIVER_OK */
+    *R(VIRTIO_MMIO_GUEST_PAGE_SIZE) = PGSIZE;
 
-    /* re-read status to ensure FEATURES_OK is set */
-    if (!(*R(VIRTIO_MMIO_STATUS) & VIRTIO_CONFIG_S_FEATURES_OK)) {
-        panic("virtio-net: FEATURES_OK failed");
-    }
+    /* tell device we're completely ready */
+    nic->status |= VIRTIO_CONFIG_S_DRIVER_OK;
+    *R(VIRTIO_MMIO_STATUS) = nic->status;
 
     /* read MAC address */
     if (nic->features & (1 << VIRTIO_NET_F_MAC)) {
@@ -458,7 +449,7 @@ virtio_net_init(void)
             addr[i] = *(volatile uint8 *)((uint64)(VIRTIO1 + VIRTIO_MMIO_CONFIG + i));
         }
     } else {
-        debugf("virtio-net: device does not provide a MAC address");
+        printf("virtio-net: device does not provide a MAC address, using default\n");
         /* use default MAC */
         addr[0] = 0x52;
         addr[1] = 0x54;
@@ -483,10 +474,6 @@ virtio_net_init(void)
     __sync_synchronize();
     nic->rx_q.avail->idx = QSIZE;
 
-    /* tell device we're completely ready */
-    nic->status |= VIRTIO_CONFIG_S_DRIVER_OK;
-    *R(VIRTIO_MMIO_STATUS) = nic->status;
-
     /* setup device driver structure */
     dev = net_device_alloc();
     if (!dev) {
@@ -504,5 +491,25 @@ virtio_net_init(void)
     }
     nic->dev = dev;
 
-    infof("virtio-net: initialized, addr=%s", ether_addr_ntop(dev->addr, mac, sizeof(mac)));
+    printf("virtio-net: initialized, addr=%s\n", ether_addr_ntop(dev->addr, mac, sizeof(mac)));
+
+    /* ch9: 配置IP地址和默认网关 (QEMU用户网络模式) */
+    {
+        struct ip_iface *iface;
+        /* QEMU用户网络: 虚拟机IP 10.0.2.15, 网关 10.0.2.2 */
+        iface = ip_iface_alloc("10.0.2.15", "255.255.255.0");
+        if (!iface) {
+            printf("virtio-net: ip_iface_alloc() failure\n");
+            return;
+        }
+        if (ip_iface_register(dev, iface) == -1) {
+            printf("virtio-net: ip_iface_register() failure\n");
+            return;
+        }
+        if (ip_route_set_default_gateway(iface, "10.0.2.2") == -1) {
+            printf("virtio-net: ip_route_set_default_gateway() failure\n");
+            return;
+        }
+        printf("virtio-net: IP configured, addr=10.0.2.15, gateway=10.0.2.2\n");
+    }
 }

@@ -13,6 +13,15 @@ struct ether_hdr {
 const uint8 ETHER_ADDR_ANY[ETHER_ADDR_LEN] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 const uint8 ETHER_ADDR_BROADCAST[ETHER_ADDR_LEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
+/* 将一个字节转换为两位十六进制字符 */
+static void
+byte_to_hex(uint8 b, char *out)
+{
+    const char hex[] = "0123456789abcdef";
+    out[0] = hex[(b >> 4) & 0x0f];
+    out[1] = hex[b & 0x0f];
+}
+
 int
 ether_addr_pton(const char *p, uint8 *n)
 {
@@ -40,10 +49,22 @@ ether_addr_pton(const char *p, uint8 *n)
 char *
 ether_addr_ntop(const uint8 *n, char *p, uint size)
 {
-    if (!n || !p) {
+    if (!n || !p || size < ETHER_ADDR_STR_LEN) {
         return 0;
     }
-    snprintf(p, size, "%02x:%02x:%02x:%02x:%02x:%02x", n[0], n[1], n[2], n[3], n[4], n[5]);
+    /* 格式: xx:xx:xx:xx:xx:xx */
+    byte_to_hex(n[0], p);
+    p[2] = ':';
+    byte_to_hex(n[1], p + 3);
+    p[5] = ':';
+    byte_to_hex(n[2], p + 6);
+    p[8] = ':';
+    byte_to_hex(n[3], p + 9);
+    p[11] = ':';
+    byte_to_hex(n[4], p + 12);
+    p[14] = ':';
+    byte_to_hex(n[5], p + 15);
+    p[17] = '\0';
     return p;
 }
 

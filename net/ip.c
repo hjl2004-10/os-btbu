@@ -41,6 +41,26 @@ static struct ip_iface *ifaces;
 static struct ip_protocol *protocols;
 static struct ip_route *routes;
 
+/* 将数字转为字符串（用于IP地址格式化） */
+static int
+ip_itoa(int num, char *buf)
+{
+    char tmp[4];
+    int i = 0, j = 0;
+    if (num == 0) {
+        buf[j++] = '0';
+    } else {
+        while (num > 0) {
+            tmp[i++] = '0' + (num % 10);
+            num /= 10;
+        }
+        while (i > 0) {
+            buf[j++] = tmp[--i];
+        }
+    }
+    return j;
+}
+
 int
 ip_addr_pton(const char *p, ip_addr_t *n)
 {
@@ -70,9 +90,21 @@ char *
 ip_addr_ntop(ip_addr_t n, char *p, uint size)
 {
     uint8 *u8;
+    int pos = 0;
 
+    if (size < IP_ADDR_STR_LEN) {
+        return 0;
+    }
     u8 = (uint8 *)&n;
-    snprintf(p, size, "%d.%d.%d.%d", u8[0], u8[1], u8[2], u8[3]);
+    /* 格式: xxx.xxx.xxx.xxx */
+    pos += ip_itoa(u8[0], p + pos);
+    p[pos++] = '.';
+    pos += ip_itoa(u8[1], p + pos);
+    p[pos++] = '.';
+    pos += ip_itoa(u8[2], p + pos);
+    p[pos++] = '.';
+    pos += ip_itoa(u8[3], p + pos);
+    p[pos] = '\0';
     return p;
 }
 
@@ -103,10 +135,17 @@ char *
 ip_endpoint_ntop(const struct ip_endpoint *n, char *p, uint size)
 {
     uint offset;
+    uint16 port;
 
     ip_addr_ntop(n->addr, p, size);
     offset = strlen(p);
-    snprintf(p + offset, size - offset, ":%d", ntoh16(n->port));
+    if (offset + 6 >= size) { /* 最多需要 :65535 = 6字符 */
+        return p;
+    }
+    p[offset++] = ':';
+    port = ntoh16(n->port);
+    offset += ip_itoa(port, p + offset);
+    p[offset] = '\0';
     return p;
 }
 
