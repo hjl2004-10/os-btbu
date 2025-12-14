@@ -123,7 +123,7 @@ struct virtio_net {
     struct net_device *dev;
     uint32 status;
     uint64 features;
-    struct spinlock lock;
+    mutex_t lock;
     struct virtq rx_q;
     struct virtq tx_q;
     char rx_bufs[QSIZE][RX_BUF_SIZE];
@@ -229,7 +229,7 @@ virtio_net_open(struct net_device *dev)
 {
     struct virtio_net *nic = PRIV(dev);
 
-    acquire(&nic->lock);
+    mutex_lock(&nic->lock);
 
     /* set receive buffers */
     for (int i = 0; i < QSIZE; i++) {
@@ -250,7 +250,7 @@ virtio_net_open(struct net_device *dev)
     /* notify the device of new RX buffers */
     *R(VIRTIO_MMIO_QUEUE_NOTIFY) = RXQ;
 
-    release(&nic->lock);
+    mutex_unlock(&nic->lock);
 
     return 0;
 }
@@ -261,7 +261,7 @@ virtio_net_close(struct net_device *dev)
 {
     struct virtio_net *nic = PRIV(dev);
 
-    acquire(&nic->lock);
+    mutex_lock(&nic->lock);
 
     nic->status = *R(VIRTIO_MMIO_STATUS);
 
@@ -269,7 +269,7 @@ virtio_net_close(struct net_device *dev)
     nic->status &= ~VIRTIO_CONFIG_S_DRIVER_OK;
     *R(VIRTIO_MMIO_STATUS) = nic->status;
 
-    release(&nic->lock);
+    mutex_unlock(&nic->lock);
     return 0;
 }
 
@@ -286,12 +286,12 @@ virtio_net_write(struct net_device *dev, const uint8 *data, uint len)
         return -1;
     }
 
-    acquire(&nic->lock);
+    mutex_lock(&nic->lock);
 
     /* allocate descriptor */
     idx = virtq_alloc_desc(&nic->tx_q);
     if (idx == -1) {
-        release(&nic->lock);
+        mutex_unlock(&nic->lock);
         return -1;
     }
 
@@ -319,7 +319,7 @@ virtio_net_write(struct net_device *dev, const uint8 *data, uint len)
     nic->tx_q.avail->idx++;
     __sync_synchronize();
 
-    release(&nic->lock);
+    mutex_unlock(&nic->lock);
 
     /* notify the device of a new TX packet */
     *R(VIRTIO_MMIO_QUEUE_NOTIFY) = TXQ;
@@ -364,7 +364,7 @@ virtio_net_intr(void)
 {
     struct virtio_net *nic = &_nic0;
 
-    acquire(&nic->lock);
+    mutex_lock(&nic->lock);
 
     /* acknowledge the interrupt and clear the status */
     *R(VIRTIO_MMIO_INTERRUPT_ACK) = *R(VIRTIO_MMIO_INTERRUPT_STATUS) & 0x3;
@@ -387,7 +387,7 @@ virtio_net_intr(void)
     }
     __sync_synchronize();
 
-    release(&nic->lock);
+    mutex_unlock(&nic->lock);
 
     /* notify the device of new RX buffers */
     *R(VIRTIO_MMIO_QUEUE_NOTIFY) = RXQ;
@@ -411,7 +411,7 @@ virtio_net_init(void)
     struct net_device *dev;
     char mac[ETHER_ADDR_STR_LEN];
 
-    initlock(&nic->lock, "virtio-net");
+    mutex_init(&nic->lock);
 
     /* find virtio-net device */
     if (*R(VIRTIO_MMIO_MAGIC_VALUE) != 0x74726976 ||

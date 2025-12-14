@@ -1,12 +1,15 @@
-/* ch9: 网络协议栈 - 平台适配层实现 */
+/* ch9: 网络协议栈 - 平台适配实现 (uCore/os-btbu) */
 #include "platform.h"
 
-int net_errno;
-struct spinlock net_pendinglock;
-int net_pending;
+/* 全局错误号 */
+int net_errno = 0;
 
-/* 系统启动时的tick计数 */
-static uint64 boot_ticks = 0;
+/* 网络中断待处理标志 */
+int net_pending = 0;
+mutex_t net_pendinglock = MUTEX_INITIALIZER;
+
+/* 随机数生成器状态 */
+static unsigned int rand_seed = 1;
 
 /*
  * Time functions
@@ -15,6 +18,7 @@ static uint64 boot_ticks = 0;
 void
 gettimeofday(struct timeval *tv, void *tz)
 {
+    (void)tz;
     uint64 ticks = r_time();
     /* 假设时钟频率为10MHz (QEMU默认) */
     tv->tv_sec = ticks / 10000000;
@@ -106,8 +110,6 @@ strrchr(const char *cp, int ch)
  * Random
  */
 
-static unsigned int rand_seed = 1;
-
 void
 srand(unsigned int newseed)
 {
@@ -129,8 +131,7 @@ random(void)
 void
 net_platform_init(void)
 {
-    initlock(&net_pendinglock, "net_pending");
+    mutex_init(&net_pendinglock);
     net_pending = 0;
-    boot_ticks = r_time();
-    srand((unsigned int)boot_ticks);
+    srand((unsigned int)r_time());
 }

@@ -1,13 +1,14 @@
-/* ch9: 网络协议栈 - 平台适配层 (uCore) */
+/* ch9: 网络协议栈 - 平台适配层 (uCore/os-btbu) */
 #ifndef PLATFORM_H
 #define PLATFORM_H
 
-#include "../types.h"
-#include "../riscv.h"
-#include "../defs.h"
-#include "../param.h"
-#include "../spinlock.h"
-#include "../proc.h"
+#include "../os/types.h"
+#include "../os/riscv.h"
+#include "../os/const.h"
+#include "../os/kalloc.h"
+#include "../os/string.h"
+#include "../os/printf.h"
+#include "../os/log.h"
 
 /*
  * Standard definitions
@@ -73,6 +74,16 @@ timerclear(struct timeval *tv)
     tv->tv_usec = 0;
 }
 
+static inline void
+timeval_add_usec(struct timeval *tv, unsigned int usec)
+{
+    tv->tv_usec += usec;
+    while (tv->tv_usec >= 1000000) {
+        tv->tv_sec++;
+        tv->tv_usec -= 1000000;
+    }
+}
+
 #define timercmp(a, b, cmp) \
     ((a)->tv_sec == (b)->tv_sec ? (a)->tv_usec cmp (b)->tv_usec : (a)->tv_sec cmp (b)->tv_sec)
 
@@ -116,50 +127,72 @@ memory_free(void *ptr)
 }
 
 /*
- * Mutex
+ * Simple spinlock using interrupt enable/disable
+ * os-btbu不使用spinlock，我们用关中断实现简单互斥
  */
 
-typedef struct spinlock mutex_t;
+typedef struct {
+    int locked;
+    int intena;  /* 保存之前的中断状态 */
+} mutex_t;
 
-#define MUTEX_INITIALIZER {0}
+#define MUTEX_INITIALIZER {0, 0}
 
 static inline int
-mutex_init(mutex_t *mutex)
+mutex_init(mutex_t *m)
 {
-    initlock(mutex, "net_mutex");
+    m->locked = 0;
+    m->intena = 0;
     return 0;
 }
 
 static inline int
-mutex_lock(mutex_t *mutex)
+mutex_lock(mutex_t *m)
 {
-    acquire(mutex);
+    /* 关中断并自旋 */
+    int intena = (r_sstatus() & SSTATUS_SIE) != 0;
+    intr_off();
+
+    while (__sync_lock_test_and_set(&m->locked, 1) != 0) {
+        /* spin */
+    }
+
+    m->intena = intena;
+    __sync_synchronize();
     return 0;
 }
 
 static inline int
-mutex_unlock(mutex_t *mutex)
+mutex_unlock(mutex_t *m)
 {
-    release(mutex);
+    int intena = m->intena;
+
+    __sync_synchronize();
+    __sync_lock_release(&m->locked);
+
+    /* 恢复中断状态 */
+    if (intena) {
+        intr_on();
+    }
     return 0;
 }
 
 /*
- * Interrupt
+ * Interrupt handling for network
  */
 
 #define INTR_IRQ_SOFTIRQ 0x01
 #define INTR_IRQ_EVENT   0x02
 
-extern struct spinlock net_pendinglock;
 extern int net_pending;
+extern mutex_t net_pendinglock;
 
 static inline int
 intr_raise_irq(unsigned int irq)
 {
-    acquire(&net_pendinglock);
+    mutex_lock(&net_pendinglock);
     net_pending |= irq;
-    release(&net_pendinglock);
+    mutex_unlock(&net_pendinglock);
     return 0;
 }
 
@@ -183,20 +216,23 @@ intr_shutdown(void)
 
 /*
  * Scheduler context for blocking operations
+ * 在os-btbu中使用简单的忙等待（busy-wait）实现
  */
 
 struct sched_ctx {
     int interrupted;
     int wc; /* wait count */
+    int ready; /* 用于简单的等待/唤醒机制 */
 };
 
-#define SCHED_CTX_INITIALIZER {0, 0}
+#define SCHED_CTX_INITIALIZER {0, 0, 0}
 
 static inline int
 sched_ctx_init(struct sched_ctx *ctx)
 {
     ctx->interrupted = 0;
     ctx->wc = 0;
+    ctx->ready = 0;
     return 0;
 }
 
@@ -209,17 +245,34 @@ sched_ctx_destroy(struct sched_ctx *ctx)
     return 0;
 }
 
+/* 简化的sleep：使用忙等待（适用于内核网络操作） */
 static inline int
 sched_sleep(struct sched_ctx *ctx, mutex_t *mutex, const struct timespec *abstime)
 {
     (void)abstime;
+
     if (ctx->interrupted) {
         net_errno = EINTR;
         return -1;
     }
+
     ctx->wc++;
-    sleep(ctx, mutex);
+    ctx->ready = 0;
+
+    /* 释放锁后等待 */
+    mutex_unlock(mutex);
+
+    /* 忙等待直到被唤醒或中断 */
+    while (!ctx->ready && !ctx->interrupted) {
+        __sync_synchronize();
+        /* 可以加入小延时减少CPU占用 */
+    }
+
+    /* 重新获取锁 */
+    mutex_lock(mutex);
+
     ctx->wc--;
+
     if (ctx->interrupted) {
         if (!ctx->wc) {
             ctx->interrupted = 0;
@@ -233,7 +286,8 @@ sched_sleep(struct sched_ctx *ctx, mutex_t *mutex, const struct timespec *abstim
 static inline int
 sched_wakeup(struct sched_ctx *ctx)
 {
-    wakeup(ctx);
+    ctx->ready = 1;
+    __sync_synchronize();
     return 0;
 }
 
@@ -241,8 +295,13 @@ static inline int
 sched_interrupt(struct sched_ctx *ctx)
 {
     ctx->interrupted = 1;
-    wakeup(ctx);
+    __sync_synchronize();
     return 0;
 }
+
+/*
+ * Platform initialization
+ */
+void net_platform_init(void);
 
 #endif

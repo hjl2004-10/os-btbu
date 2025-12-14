@@ -34,3 +34,14 @@
   - 完整的 TCP 状态机实现
   - 为后续实现 HTTP 客户端调用 AI API 做准备
 
+### 2025-12-14
+- 集成网络协议栈到内核
+  - 修改 Makefile 支持 net/ 目录编译
+  - 添加 VIRTIO1 网络设备内存映射和中断处理
+  - 在 main.c 中初始化网络协议栈
+  - QEMU 启动参数添加 virtio-net-device
+- 实现 HTTP 客户端（net/http.c）
+  - 支持 HTTP GET/POST 请求
+  - URL 解析、请求构建、响应解析
+  - 为调用 AI API（DeepSeek等）做准备
+

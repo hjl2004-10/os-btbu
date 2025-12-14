@@ -4,6 +4,7 @@ all: build
 K = os
 U = user
 F = nfs
+N = net
 
 TOOLPREFIX = riscv64-unknown-elf-
 CC = $(TOOLPREFIX)gcc
@@ -15,13 +16,18 @@ PY = python3
 GDB = $(TOOLPREFIX)gdb
 CP = cp
 BUILDDIR = build
-C_SRCS = $(wildcard $K/*.c)
-AS_SRCS = $(wildcard $K/*.S)
-C_OBJS = $(addprefix $(BUILDDIR)/, $(addsuffix .o, $(basename $(C_SRCS))))
-AS_OBJS = $(addprefix $(BUILDDIR)/, $(addsuffix .o, $(basename $(AS_SRCS))))
-OBJS = $(C_OBJS) $(AS_OBJS)
 
-HEADER_DEP = $(addsuffix .d, $(basename $(C_OBJS)))
+# ch9: 添加网络协议栈源文件
+C_SRCS = $(wildcard $K/*.c) $(wildcard $N/*.c)
+AS_SRCS = $(wildcard $K/*.S)
+
+# 分别处理os和net目录的对象文件
+K_C_OBJS = $(addprefix $(BUILDDIR)/, $(addsuffix .o, $(basename $(wildcard $K/*.c))))
+N_C_OBJS = $(addprefix $(BUILDDIR)/, $(addsuffix .o, $(basename $(wildcard $N/*.c))))
+AS_OBJS = $(addprefix $(BUILDDIR)/, $(addsuffix .o, $(basename $(AS_SRCS))))
+OBJS = $(K_C_OBJS) $(N_C_OBJS) $(AS_OBJS)
+
+HEADER_DEP = $(addsuffix .d, $(basename $(K_C_OBJS) $(N_C_OBJS)))
 
 ifeq (,$(findstring initproc.o,$(OBJS)))
 	AS_OBJS += $(BUILDDIR)/$K/initproc.o
@@ -37,7 +43,7 @@ CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
 CFLAGS += -MD
 CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
-CFLAGS += -I$K
+CFLAGS += -I$K -I.
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 LOG ?= error
@@ -67,19 +73,19 @@ endif
 
 LDFLAGS = -z max-page-size=4096
 
+# os目录的编译规则
 $(AS_OBJS): $(BUILDDIR)/$K/%.o : $K/%.S
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(C_OBJS): $(BUILDDIR)/$K/%.o : $K/%.c  $(BUILDDIR)/$K/%.d
+$(K_C_OBJS): $(BUILDDIR)/$K/%.o : $K/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(HEADER_DEP): $(BUILDDIR)/$K/%.d : $K/%.c
+# ch9: net目录的编译规则
+$(N_C_OBJS): $(BUILDDIR)/$N/%.o : $N/%.c
 	@mkdir -p $(@D)
-	@set -e; rm -f $@; $(CC) -MM $< $(INCLUDEFLAGS) > $@.$$$$; \
-        sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
-        rm -f $@.$$$$
+	$(CC) $(CFLAGS) -c $< -o $@
 
 INIT_PROC ?= usershell
 
@@ -107,7 +113,9 @@ QEMUOPTS = \
 	-bios $(BOOTLOADER) \
 	-kernel build/kernel	\
 	-drive file=$(F)/fs-copy.img,if=none,format=raw,id=x0 \
-    -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+    -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
+    -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.1 \
+    -netdev user,id=net0,hostfwd=tcp::8080-:80
 
 $(F)/fs.img:
 	make -C $(F)

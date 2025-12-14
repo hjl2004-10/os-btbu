@@ -7,6 +7,9 @@
 #include "virtio.h"
 #include "proc.h"
 
+/* ch9: 网络中断处理函数声明 */
+extern void virtio_net_intr(void);
+
 extern char trampoline[], uservec[];
 extern char userret[], kernelvec[];
 
@@ -54,6 +57,9 @@ void devintr(uint64 cause)
 			// do nothing
 		} else if (irq == VIRTIO0_IRQ) {
 			virtio_disk_intr();
+		} else if (irq == VIRTIO1_IRQ) {
+			/* ch9: 处理网络设备中断 */
+			virtio_net_intr();
 		} else if (irq) {
 			infof("unexpected interrupt irq=%d\n", irq);
 		}
