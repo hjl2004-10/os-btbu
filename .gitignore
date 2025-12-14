@@ -4,8 +4,11 @@
 .claude
 build
 target
-/user
-/doc
+# user目录：排除编译产物，保留源码
+/user/build
+/user/asm
+/user/target
+# doc目录：允许上传
 link_app.S
 kernel_app.ld
 *.o

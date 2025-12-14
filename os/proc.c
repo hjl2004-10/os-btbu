@@ -203,6 +203,10 @@ found:
 	/* ch5: 初始化stride调度字段 */
 	p->stride = 0;
 	p->priority = 16;  /* 默认优先级为16 */
+	/* ch10: 初始化进化调度字段 */
+	p->npc_id = -1;       /* -1表示非NPC进程 */
+	p->dynamic_prio = 0;  /* 普通进程不参与进化调度 */
+	p->ipc_rx_bytes = 0;
 	return p;
 }
 

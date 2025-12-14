@@ -211,7 +211,7 @@
 #define SYS_sendmsg 211
 #define SYS_recvmsg 212
 #define SYS_readahead 213
-#define SYS_brk 214
+#define SYS_sbrk 214
 #define SYS_munmap 215
 #define SYS_mremap 216
 #define SYS_add_key 217
@@ -277,23 +277,11 @@
 #define SYS_io_pgetevents 292
 #define SYS_rseq 293
 #define SYS_kexec_file_load 294
-#define SYS_spawn 400
-#define SYS_pidfd_send_signal 424
-#define SYS_io_uring_setup 425
-#define SYS_io_uring_enter 426
-#define SYS_io_uring_register 427
-#define SYS_open_tree 428
-#define SYS_move_mount 429
-#define SYS_fsopen 430
-#define SYS_fsconfig 431
-#define SYS_fsmount 432
-#define SYS_fspick 433
-#define SYS_pidfd_open 434
-#define SYS_clone3 435
-#define SYS_openat2 437
-#define SYS_pidfd_getfd 438
-#define SYS_faccessat2 439
 #define SYS_riscv_flush_icache 244 + 15
+#define SYS_spawn 400
+#define SYS_mailread 401
+#define SYS_mailwrite 402
+#define SYS_trace 410
 #define SYS_thread_create 460
 #define SYS_waittid 462
 #define SYS_mutex_create 463
@@ -306,9 +294,6 @@
 #define SYS_condvar_create 471
 #define SYS_condvar_signal 472
 #define SYS_condvar_wait 473
-#define SYS_trace 410  /* ch3: 系统调用追踪 */
-#define SYS_sbrk 214   /* ch4: 内存扩展 */
-/* ch10: 进化调度系统调用 */
 #define SYS_npc_register 483
 #define SYS_npc_get_status 484
 #define SYS_npc_yield 485

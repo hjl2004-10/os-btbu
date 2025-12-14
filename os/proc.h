@@ -77,6 +77,10 @@ struct proc {
 	/* ch5: stride调度算法所需字段 */
 	uint64 stride;    /* 当前已运行的"长度" */
 	uint64 priority;  /* 进程优先级，默认16 */
+	/* ch10: 进化调度字段 */
+	int npc_id;           /* NPC编号, -1=普通进程 */
+	int dynamic_prio;     /* 动态优先级 0-100, 归0即死 */
+	uint64 ipc_rx_bytes;  /* 收到的IPC字节数 (社交热度) */
 };
 
 int cpuid();

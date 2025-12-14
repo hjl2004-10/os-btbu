@@ -5,6 +5,7 @@
 #include "timer.h"
 #include "trap.h"
 #include "virtio.h"
+#include "ai_sched.h"
 
 /* ch9: 网络协议栈函数声明 */
 extern void net_platform_init(void);
@@ -95,6 +96,9 @@ void main()
 
 	/* ch9: 测试AI API */
 	test_ai_api();
+
+	/* ch10: 初始化进化调度器 */
+	ai_sched_init();
 
 	load_init_app();
 	infof("start scheduler!");

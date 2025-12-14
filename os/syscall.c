@@ -6,6 +6,7 @@
 #include "syscall_ids.h"
 #include "timer.h"
 #include "trap.h"
+#include "ai_sched.h"
 
 uint64 console_write(uint64 va, uint64 len)
 {
@@ -798,6 +799,38 @@ int sys_fstat(int fd, uint64 st_va)
 	return 0;
 }
 
+/* ch10: sys_npc_register - NPC注册 */
+int sys_npc_register(int npc_id)
+{
+	return ai_sched_register(npc_id);
+}
+
+/* ch10: sys_npc_get_status - 获取NPC状态 */
+int sys_npc_get_status(uint64 st_va)
+{
+	struct proc *p = curr_proc();
+	struct npc_status st;
+
+	if (ai_sched_get_status(&st) < 0)
+		return -1;
+
+	/* ch10: 拷贝到用户空间 */
+	if (copyout(p->pagetable, st_va, (char *)&st, sizeof(st)) < 0)
+		return -1;
+
+	return 0;
+}
+
+/* ch10: sys_npc_yield - NPC让出CPU并触发调度tick */
+int sys_npc_yield(void)
+{
+	/* ch10: 触发进化调度tick */
+	ai_sched_tick();
+	/* ch10: 让出CPU */
+	yield();
+	return 0;
+}
+
 extern char trap_page[];
 
 void syscall()
@@ -926,6 +959,16 @@ void syscall()
 		break;
 	case SYS_fstat:
 		ret = sys_fstat(args[0], args[1]);
+		break;
+	/* ch10: 进化调度系统调用 */
+	case SYS_npc_register:
+		ret = sys_npc_register(args[0]);
+		break;
+	case SYS_npc_get_status:
+		ret = sys_npc_get_status(args[0]);
+		break;
+	case SYS_npc_yield:
+		ret = sys_npc_yield();
 		break;
 	default:
 		ret = -1;

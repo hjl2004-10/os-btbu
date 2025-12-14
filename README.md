@@ -52,6 +52,13 @@
   - 测试服务器：119.3.217.132:8000
   - 模型：lingxi-1
   - 收到响应："Hello! How can I assist you today? 😊"
+- 实现 ch10 进化调度（NPC沙盒）
+  - 新增 3 个系统调用：npc_register(483)、npc_get_status(484)、npc_yield(485)
+  - 实现优先级衰减机制：每tick优先级-1
+  - 实现 OOM Killer：优先级归0时NPC被淘汰
+  - 预留 IPC 奖励接口：为 ch11 社交系统做准备
+  - 用户态程序：ch10_world（世界管理器）、ch10_npc（NPC进程）
+  - 测试验证：3个NPC并发运行约50轮后全部因优先级耗尽而死亡
 
 ## ch9 网络协议栈调试记录
 
