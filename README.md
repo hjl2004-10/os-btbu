@@ -59,3 +59,15 @@
   - 预留 IPC 奖励接口：为 ch11 社交系统做准备
   - 用户态程序：ch10_world（世界管理器）、ch10_npc（NPC进程）
   - 测试验证：3个NPC并发运行约50轮后全部因优先级耗尽而死亡
+
+### 2025-12-25
+- 实现 ch11 NPC社交系统（阶段一：四线程框架）
+  - NPC进程采用四线程架构：感知(perception)、思考(thinking)、沟通(communication)、记忆(memory)
+  - 使用现有同步原语：mutex_blocking_create()、condvar_create()
+  - 线程间通过共享数据结构 npc_shared 通信
+  - 思考线程支持两种触发：收到消息触发、随机主动发起(20%概率)
+  - 支持 [to none] 决策：NPC可选择不发送消息
+  - 用户态程序：ch11_world（世界管理器）、ch11_npc（NPC四线程进程）
+  - 测试验证：4个线程正常启动运行，随机触发和消息模拟工作正常
+  - 设计文档：doc/ch11-npc-social.md、doc/ch11-impl-details.md
+  - 待实现：阶段二(管道通信)、阶段三(AI驱动+三级记忆)

@@ -28,6 +28,8 @@ CH7_BASE_TESTS := ch7b_ $(CH6_BASE_TESTS)
 CH8_BASE_TESTS := ch8b_ $(CH7_BASE_TESTS)
 # ch10: 进化调度
 CH10_BASE_TESTS := $(CH8_BASE_TESTS) ch10_
+# ch11: NPC社交系统
+CH11_BASE_TESTS := $(CH10_BASE_TESTS) ch11_
 
 
 CH2_TESTS := $(CH2_BASE_TESTS)
@@ -40,6 +42,8 @@ CH7_TESTS := $(CH7_BASE_TESTS) ch7_
 CH8_TESTS := $(CH8_BASE_TESTS) ch8_
 # ch10: 进化调度
 CH10_TESTS := $(CH10_BASE_TESTS)
+# ch11: NPC社交系统
+CH11_TESTS := $(CH11_BASE_TESTS)
 
 BASE ?= 0
 
@@ -52,6 +56,7 @@ CH6_TESTS := $(CH6_BASE_TESTS)
 CH7_TESTS := $(CH7_BASE_TESTS)
 CH8_TESTS := $(CH8_BASE_TESTS)
 CH10_TESTS := $(CH10_BASE_TESTS)
+CH11_TESTS := $(CH11_BASE_TESTS)
 endif
 
 ifeq ($(CHAPTER), 2)
@@ -86,6 +91,8 @@ else ifeq ($(CHAPTER), 8_only)
 	CH_TESTS := ch8_
 else ifeq ($(CHAPTER), 10)
 	CH_TESTS := $(CH10_TESTS)
+else ifeq ($(CHAPTER), 11)
+	CH_TESTS := $(CH11_TESTS)
 endif
 
 binary:
