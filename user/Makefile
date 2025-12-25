@@ -110,6 +110,8 @@ target: binary del
 	@echo tests=$(CH_TESTS)
 	@$(foreach t, $(CH_TESTS), cp $(bin_dir)/$(t)* $(out_dir)/bin/;)
 	@$(foreach t, $(CH_TESTS), cp $(elf_dir)/$(t)* $(out_dir)/elf/;)
+	@echo "Copying all binaries from build/bin to target/bin..."
+	@cp -f $(bin_dir)/* $(out_dir)/bin/ 2>/dev/null || true
 
 clean:
 	@rm -rf asm build target

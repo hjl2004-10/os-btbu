@@ -1,6 +1,6 @@
 /* ch11: NPC四线程架构 */
 /* 功能: 感知、思考、沟通、记忆四线程并发运行 */
-/* 阶段二: 真正使用管道进行NPC间通信 */
+/* 阶段三: AI驱动决策 + 三级记忆系统 */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +10,25 @@
 
 /* ch11: NPC数量 */
 #define NPC_COUNT 3
+
+/* ch11: 三级记忆系统参数 */
+#define L2_MEMORY_SIZE 1024    /* L2记忆缓冲区大小 */
+#define L3_HISTORY_SIZE 512    /* L3会话历史大小 */
+#define AI_RESPONSE_SIZE 512   /* AI响应缓冲区大小 */
+#define PROMPT_SIZE 1024       /* Prompt缓冲区大小 */
+
+/* ch11: L1人设模板 - 每个NPC不同性格 */
+static const char *L1_PERSONAS[NPC_COUNT] = {
+	/* NPC 1: 外向热情型 */
+	"你是NPC1，性格外向热情，喜欢主动和别人交流。"
+	"说话简短友好(20字以内)。",
+	/* NPC 2: 内向沉稳型 */
+	"你是NPC2，性格内向沉稳，喜欢思考问题。"
+	"说话简短有深度(20字以内)。",
+	/* NPC 3: 幽默风趣型 */
+	"你是NPC3，性格幽默风趣，喜欢开玩笑。"
+	"说话简短有趣(20字以内)。"
+};
 
 /* ch11: 简单的字符串复制 */
 static void str_copy(char *dst, const char *src, int maxlen)
@@ -99,9 +118,17 @@ struct npc_shared {
 	int msg_sent;
 	int msg_recv;
 	int think_count;
+	int ai_call_count;	/* AI调用次数 (阶段三) */
 
 	/* ch11: 目标进程PID (用于IPC奖励) */
 	int target_pids[NPC_COUNT];	/* target_pids[npc_id-1] = pid */
+
+	/* ch11: 阶段三 - 三级记忆系统 */
+	char l3_history[L3_HISTORY_SIZE];	/* L3: 会话历史 */
+	int l3_len;
+	char pending_memory[256];		/* 待保存到L2的记忆 */
+	int pending_memory_len;
+	int has_pending_memory;			/* 有记忆待保存 */
 };
 
 /* ch11: 全局共享数据 */
@@ -116,6 +143,174 @@ static int find_write_fd_idx(struct npc_shared *shared, int target_npc)
 			return i;
 	}
 	return -1;
+}
+
+/* ch11: 阶段三 - 转小写 */
+static char to_lower(char c)
+{
+	if (c >= 'A' && c <= 'Z')
+		return c + ('a' - 'A');
+	return c;
+}
+
+/* ch11: 阶段三 - 查找字符串(忽略大小写) */
+static char *str_find_i(const char *haystack, const char *needle)
+{
+	if (!haystack || !needle || !*needle)
+		return (char *)haystack;
+	for (; *haystack; haystack++) {
+		const char *h = haystack;
+		const char *n = needle;
+		while (*h && *n && to_lower(*h) == to_lower(*n)) {
+			h++;
+			n++;
+		}
+		if (!*n)
+			return (char *)haystack;
+	}
+	return 0;
+}
+
+/* ch11: 阶段三 - 解析AI响应 */
+/* 格式: [to npcX]: 消息内容 [memory]: 记忆内容 */
+/* 支持大小写: [to NPC1] 或 [to npc1] 都可以 */
+/* 返回: 目标NPC ID, -1表示[to none], 0表示解析失败 */
+static int parse_ai_response(const char *response,
+			     char *message, int msg_maxlen,
+			     char *memory, int mem_maxlen)
+{
+	const char *p;
+	int target_npc = 0;
+	int i;
+
+	message[0] = '\0';
+	memory[0] = '\0';
+
+	/* ch11: 查找 [to npcX] 或 [to none] (忽略大小写) */
+	p = str_find_i(response, "[to ");
+	if (p) {
+		p += 4;  /* 跳过 "[to " */
+		/* ch11: 检查 none (忽略大小写) */
+		if (to_lower(p[0]) == 'n' && to_lower(p[1]) == 'o' &&
+		    to_lower(p[2]) == 'n' && to_lower(p[3]) == 'e') {
+			/* [to none] */
+			target_npc = -1;
+			p += 5;  /* 跳过 "none]" */
+		} else if (to_lower(p[0]) == 'n' && to_lower(p[1]) == 'p' &&
+			   to_lower(p[2]) == 'c') {
+			/* [to npcX] 或 [to NPCX] */
+			p += 3;  /* 跳过 "npc" 或 "NPC" */
+			target_npc = 0;
+			while (*p >= '0' && *p <= '9') {
+				target_npc = target_npc * 10 + (*p - '0');
+				p++;
+			}
+			if (*p == ']')
+				p++;
+		}
+
+		/* ch11: 跳过冒号和空格 */
+		while (*p == ':' || *p == ' ')
+			p++;
+
+		/* ch11: 提取消息内容到 [memory] 或末尾 */
+		i = 0;
+		while (*p && i < msg_maxlen - 1) {
+			/* ch11: 遇到 [memory] 或 [to 停止 (忽略大小写) */
+			if (p[0] == '[' && (to_lower(p[1]) == 'm' || to_lower(p[1]) == 't'))
+				break;
+			message[i++] = *p++;
+		}
+		/* ch11: 去除末尾空白 */
+		while (i > 0 && (message[i-1] == ' ' || message[i-1] == '\n'))
+			i--;
+		message[i] = '\0';
+	}
+
+	/* ch11: 查找 [memory]: (忽略大小写) */
+	p = str_find_i(response, "[memory]:");
+	if (!p)
+		p = str_find_i(response, "[memory] ");
+	if (p) {
+		p += 9;  /* 跳过 "[memory]:" 或 "[memory] " */
+		while (*p == ' ')
+			p++;
+		i = 0;
+		while (*p && i < mem_maxlen - 1 && *p != '[') {
+			memory[i++] = *p++;
+		}
+		/* ch11: 去除末尾空白 */
+		while (i > 0 && (memory[i-1] == ' ' || memory[i-1] == '\n'))
+			i--;
+		memory[i] = '\0';
+	}
+
+	return target_npc;
+}
+
+/* ch11: 阶段三 - 构建AI prompt */
+static int build_ai_prompt(struct npc_shared *shared, char *prompt, int maxlen,
+			   const char *situation)
+{
+	char l2_memory[L2_MEMORY_SIZE];
+	int len = 0;
+
+	prompt[0] = '\0';
+
+	/* ch11: L1人设 */
+	str_append(prompt, L1_PERSONAS[shared->npc_id - 1]);
+	str_append(prompt, "\n");
+
+	/* ch11: L2记忆 - 从内核加载 */
+	if (npc_memory_load(shared->npc_id, l2_memory, sizeof(l2_memory)) > 0) {
+		str_append(prompt, "你的记忆: ");
+		str_append(prompt, l2_memory);
+		str_append(prompt, "\n");
+	}
+
+	/* ch11: L3会话历史 */
+	if (shared->l3_len > 0) {
+		str_append(prompt, "最近对话: ");
+		str_append(prompt, shared->l3_history);
+		str_append(prompt, "\n");
+	}
+
+	/* ch11: 当前情况 */
+	str_append(prompt, "现在情况: ");
+	str_append(prompt, situation);
+	str_append(prompt, "\n");
+
+	/* ch11: 输出格式要求 */
+	str_append(prompt, "请用以下格式回复(只回复一行):\n");
+	str_append(prompt, "[to npc数字]: 你要说的话\n");
+	str_append(prompt, "或者 [to none]: 不说话\n");
+	str_append(prompt, "可选: [memory]: 你想记住的事\n");
+
+	return strlen(prompt);
+}
+
+/* ch11: 阶段三 - 追加到L3会话历史 */
+static void append_to_l3(struct npc_shared *shared, const char *entry)
+{
+	int entry_len = strlen(entry);
+	int remain = L3_HISTORY_SIZE - shared->l3_len - 2;
+
+	if (remain < entry_len) {
+		/* ch11: 空间不足，清除旧历史 */
+		shared->l3_len = 0;
+		shared->l3_history[0] = '\0';
+		remain = L3_HISTORY_SIZE - 2;
+	}
+
+	if (shared->l3_len > 0) {
+		shared->l3_history[shared->l3_len++] = ';';
+	}
+
+	int copy_len = (entry_len < remain) ? entry_len : remain;
+	for (int i = 0; i < copy_len; i++) {
+		shared->l3_history[shared->l3_len++] = entry[i];
+	}
+	shared->l3_history[shared->l3_len] = '\0';
 }
 
 /* ch11: 感知线程 - 从管道读取消息 */
@@ -177,13 +372,19 @@ static void perception_thread(void *arg)
 	exit(0);
 }
 
-/* ch11: 思考线程 - 产生决策(阶段一用固定消息,阶段三调用AI) */
+/* ch11: 思考线程 - 阶段三: AI驱动决策 */
 static void thinking_thread(void *arg)
 {
 	struct npc_shared *shared = (struct npc_shared *)arg;
 	int loop = 0;
+	char prompt[PROMPT_SIZE];
+	char ai_response[AI_RESPONSE_SIZE];
+	char message[256];
+	char memory[256];
+	char situation[128];
+	int target_npc;
 
-	printf("[NPC %d][thinking] Thread started\n", shared->npc_id);
+	printf("[NPC %d][thinking] Thread started (AI-driven)\n", shared->npc_id);
 
 	while (shared->running) {
 		mutex_lock(shared->mutex_id);
@@ -208,41 +409,104 @@ static void thinking_thread(void *arg)
 		if (should_think && !shared->has_pending_send) {
 			shared->think_count++;
 
-			/* ch11: 阶段一使用固定响应，阶段三会调用AI */
-			/* 决定发送目标: 如果有收到消息则回复，否则随机选一个 */
+			/* ch11: 阶段三 - 构建当前情况描述 */
+			situation[0] = '\0';
 			if (shared->has_new_msg && shared->inbox_from > 0) {
-				shared->outbox_to = shared->inbox_from;
-				/* ch11: 构建回复消息 */
-				shared->outbox[0] = '\0';
-				str_append(shared->outbox, "Reply to NPC ");
-				append_int(shared->outbox, shared->inbox_from);
-				str_append(shared->outbox, ": Got your message!");
+				str_append(situation, "NPC");
+				append_int(situation, shared->inbox_from);
+				str_append(situation, "对你说: ");
+				str_append(situation, shared->inbox);
+
+				/* ch11: 记录到L3会话历史 */
+				char l3_entry[128];
+				l3_entry[0] = '\0';
+				str_append(l3_entry, "NPC");
+				append_int(l3_entry, shared->inbox_from);
+				str_append(l3_entry, ":");
+				str_append(l3_entry, shared->inbox);
+				append_to_l3(shared, l3_entry);
 			} else {
-				/* ch11: 随机选择目标或[to none] */
-				int r = rand() % 4;
-				if (r == 0) {
-					/* 25%概率不发消息 */
-					shared->outbox_to = -1;
-					printf("[NPC %d][thinking] Decision: [to none]\n",
-						shared->npc_id);
-				} else {
-					/* 选择一个其他NPC */
-					shared->outbox_to = (r % 3) + 1;
-					if (shared->outbox_to == shared->npc_id)
-						shared->outbox_to = (shared->outbox_to % 3) + 1;
-					/* ch11: 构建问候消息 */
-					shared->outbox[0] = '\0';
-					str_append(shared->outbox, "Hello NPC ");
-					append_int(shared->outbox, shared->outbox_to);
-					str_append(shared->outbox, "! How are you?");
+				str_append(situation, "你想主动找人聊天。可选目标: ");
+				int first = 1;
+				for (int j = 1; j <= NPC_COUNT; j++) {
+					if (j != shared->npc_id) {
+						if (!first) str_append(situation, ",");
+						str_append(situation, "NPC");
+						append_int(situation, j);
+						first = 0;
+					}
 				}
 			}
 
-			if (shared->outbox_to > 0) {
-				shared->outbox_len = strlen(shared->outbox);
-				shared->has_pending_send = 1;
-				printf("[NPC %d][thinking] Decision: [to npc%d]: %s\n",
-					shared->npc_id, shared->outbox_to, shared->outbox);
+			/* ch11: 阶段三 - 构建AI prompt */
+			build_ai_prompt(shared, prompt, sizeof(prompt), situation);
+
+			printf("[NPC %d][thinking] Calling AI...\n", shared->npc_id);
+
+			/* ch11: 释放锁后调用AI (AI调用可能耗时较长) */
+			mutex_unlock(shared->mutex_id);
+
+			/* ch11: 调用AI API */
+			int ai_ret = npc_ai_chat(prompt, ai_response, sizeof(ai_response));
+
+			mutex_lock(shared->mutex_id);
+
+			if (ai_ret > 0) {
+				shared->ai_call_count++;
+				printf("[NPC %d][thinking] AI response: %s\n",
+					shared->npc_id, ai_response);
+
+				/* ch11: 解析AI响应 */
+				target_npc = parse_ai_response(ai_response,
+					message, sizeof(message),
+					memory, sizeof(memory));
+
+				if (target_npc != 0) {
+					shared->outbox_to = target_npc;
+					if (target_npc > 0 && strlen(message) > 0) {
+						str_copy(shared->outbox, message, sizeof(shared->outbox));
+						shared->outbox_len = strlen(shared->outbox);
+						shared->has_pending_send = 1;
+						printf("[NPC %d][thinking] Decision: [to npc%d]: %s\n",
+							shared->npc_id, target_npc, shared->outbox);
+
+						/* ch11: 记录自己的发言到L3 */
+						char l3_entry[128];
+						l3_entry[0] = '\0';
+						str_append(l3_entry, "我->NPC");
+						append_int(l3_entry, target_npc);
+						str_append(l3_entry, ":");
+						str_append(l3_entry, message);
+						append_to_l3(shared, l3_entry);
+					} else if (target_npc < 0) {
+						printf("[NPC %d][thinking] Decision: [to none]\n",
+							shared->npc_id);
+					}
+
+					/* ch11: 如果有记忆需要保存 */
+					if (strlen(memory) > 0) {
+						str_copy(shared->pending_memory, memory,
+							sizeof(shared->pending_memory));
+						shared->pending_memory_len = strlen(memory);
+						shared->has_pending_memory = 1;
+						printf("[NPC %d][thinking] Memory to save: %s\n",
+							shared->npc_id, memory);
+					}
+				} else {
+					printf("[NPC %d][thinking] AI response parse failed\n",
+						shared->npc_id);
+				}
+			} else {
+				printf("[NPC %d][thinking] AI call failed (ret=%d)\n",
+					shared->npc_id, ai_ret);
+				/* ch11: AI失败时使用简单回退逻辑 */
+				if (shared->has_new_msg && shared->inbox_from > 0) {
+					shared->outbox_to = shared->inbox_from;
+					shared->outbox[0] = '\0';
+					str_append(shared->outbox, "收到!");
+					shared->outbox_len = strlen(shared->outbox);
+					shared->has_pending_send = 1;
+				}
 			}
 
 			/* ch11: 清除已处理的消息 */
@@ -259,8 +523,8 @@ static void thinking_thread(void *arg)
 			break;
 	}
 
-	printf("[NPC %d][thinking] Thread exiting (thought %d times)\n",
-		shared->npc_id, shared->think_count);
+	printf("[NPC %d][thinking] Thread exiting (thought %d times, AI calls %d)\n",
+		shared->npc_id, shared->think_count, shared->ai_call_count);
 	exit(0);
 }
 
@@ -327,21 +591,48 @@ static void communication_thread(void *arg)
 	exit(0);
 }
 
-/* ch11: 记忆线程 - 管理三级记忆(阶段一框架,阶段三实现) */
+/* ch11: 记忆线程 - 阶段三: 管理三级记忆 */
 static void memory_thread(void *arg)
 {
 	struct npc_shared *shared = (struct npc_shared *)arg;
 	int loop = 0;
+	int save_count = 0;
 
-	printf("[NPC %d][memory] Thread started\n", shared->npc_id);
+	printf("[NPC %d][memory] Thread started (L2 persistence)\n", shared->npc_id);
 
-	/* ch11: 阶段一只是占位，阶段三会实现三级记忆 */
-	/* L1: 人设 - 硬编码 */
-	/* L2: AI记忆 - 内核存储 */
-	/* L3: 会话历史 - 进程内存 */
+	/* ch11: 三级记忆说明 */
+	/* L1: 人设 - 硬编码在L1_PERSONAS数组 */
+	/* L2: AI记忆 - 内核存储, 通过npc_memory_save/load访问 */
+	/* L3: 会话历史 - 进程内存, 在shared->l3_history */
 
 	while (shared->running) {
-		/* ch11: 阶段一暂时只是周期运行 */
+		mutex_lock(shared->mutex_id);
+
+		/* ch11: 检查是否有待保存的记忆 */
+		if (shared->has_pending_memory && shared->pending_memory_len > 0) {
+			char *mem_content = shared->pending_memory;
+			int mem_len = shared->pending_memory_len;
+
+			printf("[NPC %d][memory] Saving to L2: \"%s\"\n",
+				shared->npc_id, mem_content);
+
+			/* ch11: 保存到内核L2记忆区 */
+			int ret = npc_memory_save(shared->npc_id, mem_content, mem_len);
+			if (ret >= 0) {
+				save_count++;
+				printf("[NPC %d][memory] L2 save OK (%d bytes)\n",
+					shared->npc_id, ret);
+			} else {
+				printf("[NPC %d][memory] L2 save failed\n", shared->npc_id);
+			}
+
+			/* ch11: 清除待保存标志 */
+			shared->has_pending_memory = 0;
+			shared->pending_memory_len = 0;
+		}
+
+		mutex_unlock(shared->mutex_id);
+
 		sched_yield();
 		loop++;
 
@@ -349,7 +640,8 @@ static void memory_thread(void *arg)
 			break;
 	}
 
-	printf("[NPC %d][memory] Thread exiting\n", shared->npc_id);
+	printf("[NPC %d][memory] Thread exiting (saved %d memories)\n",
+		shared->npc_id, save_count);
 	exit(0);
 }
 
@@ -372,7 +664,7 @@ int main(int argc, char *argv[])
 	}
 	npc_id = str_to_int(argv[1]);
 
-	printf("[NPC %d] Born! argc=%d\n", npc_id, argc);
+	printf("[NPC %d] Born! argc=%d (AI-driven, 3-level memory)\n", npc_id, argc);
 
 	/* ch11: 初始化共享数据 */
 	memset(&g_shared, 0, sizeof(g_shared));
@@ -544,9 +836,9 @@ int main(int argc, char *argv[])
 	/* ch11: 不再等待perception线程，直接退出 */
 	/* ch11: 进程退出时内核会清理所有线程 */
 
-	printf("[NPC %d] Died after %d loops (sent=%d, recv=%d, think=%d)\n",
+	printf("[NPC %d] Died after %d loops (sent=%d, recv=%d, think=%d, ai=%d)\n",
 		npc_id, loop_count, g_shared.msg_sent, g_shared.msg_recv,
-		g_shared.think_count);
+		g_shared.think_count, g_shared.ai_call_count);
 
 	return 0;
 }

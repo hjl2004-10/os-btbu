@@ -7,6 +7,17 @@
 #include "timer.h"
 #include "trap.h"
 #include "ai_sched.h"
+#include "npc_memory.h"
+
+/* ch11: AI API函数声明 */
+struct ai_chat_response {
+	int success;
+	char *content;
+	int content_len;
+	int error_code;
+};
+extern int ai_chat(const char *prompt, struct ai_chat_response *resp);
+extern void ai_chat_response_free(struct ai_chat_response *resp);
 
 uint64 console_write(uint64 va, uint64 len)
 {
@@ -844,6 +855,104 @@ int sys_npc_ipc_notify(int target_pid, int bytes)
 	return 0;
 }
 
+/* ch11: sys_npc_ai_chat - 用户态调用内核AI API */
+int sys_npc_ai_chat(uint64 prompt_va, uint64 resp_va, int resp_maxlen)
+{
+	struct proc *p = curr_proc();
+	char prompt[1024];
+	struct ai_chat_response resp;
+	int ret = -1;
+
+	/* ch11: 从用户空间拷贝prompt */
+	if (copyinstr(p->pagetable, prompt, prompt_va, sizeof(prompt)) < 0) {
+		errorf("ch11: sys_npc_ai_chat: copyinstr failed");
+		return -1;
+	}
+
+	/* ch11: 调用AI API */
+	debugf("ch11: sys_npc_ai_chat: prompt=%s", prompt);
+	if (ai_chat(prompt, &resp) < 0) {
+		errorf("ch11: sys_npc_ai_chat: ai_chat failed");
+		return -1;
+	}
+
+	if (!resp.success) {
+		errorf("ch11: sys_npc_ai_chat: AI response failed, error=%d",
+		       resp.error_code);
+		ai_chat_response_free(&resp);
+		return -1;
+	}
+
+	/* ch11: 将响应拷贝到用户空间 */
+	int copy_len = resp.content_len;
+	if (copy_len >= resp_maxlen)
+		copy_len = resp_maxlen - 1;
+
+	if (copyout(p->pagetable, resp_va, resp.content, copy_len) < 0) {
+		errorf("ch11: sys_npc_ai_chat: copyout failed");
+		ai_chat_response_free(&resp);
+		return -1;
+	}
+
+	/* ch11: 写入结束符 */
+	char null_char = '\0';
+	if (copyout(p->pagetable, resp_va + copy_len, &null_char, 1) < 0) {
+		ai_chat_response_free(&resp);
+		return -1;
+	}
+
+	ret = copy_len;
+	debugf("ch11: sys_npc_ai_chat: response len=%d", ret);
+
+	ai_chat_response_free(&resp);
+	return ret;
+}
+
+/* ch11: sys_npc_memory_save - 保存NPC的L2记忆 */
+int sys_npc_memory_save(int npc_id, uint64 content_va, int len)
+{
+	struct proc *p = curr_proc();
+	char content[NPC_MEMORY_L2_SIZE];
+
+	if (len <= 0 || len >= NPC_MEMORY_L2_SIZE)
+		return -1;
+
+	/* ch11: 从用户空间拷贝内容 */
+	if (copyin(p->pagetable, content, content_va, len) < 0)
+		return -1;
+	content[len] = '\0';
+
+	return npc_memory_save(npc_id, content, len);
+}
+
+/* ch11: sys_npc_memory_load - 读取NPC的L2记忆 */
+int sys_npc_memory_load(int npc_id, uint64 buf_va, int maxlen)
+{
+	struct proc *p = curr_proc();
+	char buf[NPC_MEMORY_L2_SIZE];
+	int len;
+
+	if (maxlen <= 0 || maxlen > NPC_MEMORY_L2_SIZE)
+		maxlen = NPC_MEMORY_L2_SIZE;
+
+	len = npc_memory_load(npc_id, buf, maxlen);
+	if (len < 0)
+		return -1;
+
+	/* ch11: 拷贝到用户空间 */
+	if (len > 0) {
+		if (copyout(p->pagetable, buf_va, buf, len + 1) < 0)
+			return -1;
+	} else {
+		/* ch11: 空记忆 */
+		char null_char = '\0';
+		if (copyout(p->pagetable, buf_va, &null_char, 1) < 0)
+			return -1;
+	}
+
+	return len;
+}
+
 extern char trap_page[];
 
 void syscall()
@@ -986,6 +1095,16 @@ void syscall()
 	/* ch11: IPC通知系统调用 */
 	case SYS_npc_ipc_notify:
 		ret = sys_npc_ipc_notify(args[0], args[1]);
+		break;
+	/* ch11: AI聊天和记忆系统调用 */
+	case SYS_npc_ai_chat:
+		ret = sys_npc_ai_chat(args[0], args[1], args[2]);
+		break;
+	case SYS_npc_memory_save:
+		ret = sys_npc_memory_save(args[0], args[1], args[2]);
+		break;
+	case SYS_npc_memory_load:
+		ret = sys_npc_memory_load(args[0], args[1], args[2]);
 		break;
 	default:
 		ret = -1;

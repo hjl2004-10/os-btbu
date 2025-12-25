@@ -25,3 +25,21 @@ int npc_ipc_notify(int target_pid, int bytes)
 {
 	return syscall(SYS_npc_ipc_notify, target_pid, bytes);
 }
+
+/* ch11: AI聊天 - 用户态调用内核AI API */
+int npc_ai_chat(const char *prompt, char *response, int resp_maxlen)
+{
+	return syscall(SYS_npc_ai_chat, prompt, response, resp_maxlen);
+}
+
+/* ch11: 记忆系统 - 保存L2记忆 */
+int npc_memory_save(int npc_id, const char *content, int len)
+{
+	return syscall(SYS_npc_memory_save, npc_id, content, len);
+}
+
+/* ch11: 记忆系统 - 读取L2记忆 */
+int npc_memory_load(int npc_id, char *buf, int maxlen)
+{
+	return syscall(SYS_npc_memory_load, npc_id, buf, maxlen);
+}

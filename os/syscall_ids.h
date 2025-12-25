@@ -314,3 +314,7 @@
 #define SYS_npc_yield 485
 /* ch11: IPC通知系统调用 */
 #define SYS_npc_ipc_notify 486
+/* ch11: AI聊天和记忆系统调用 */
+#define SYS_npc_ai_chat 487
+#define SYS_npc_memory_save 488
+#define SYS_npc_memory_load 489

@@ -464,21 +464,205 @@ sed -n -e s/__NR_/SYS_/p < syscall_ids.h.in > lib/syscall_ids.h
 
 ---
 
-## 阶段三：AI驱动决策+三级记忆（待实现）
+## 阶段三：AI驱动决策+三级记忆
 
-### 计划实现
+### 完成时间
+2025-12-26
 
-1. **thinking线程调用AI**
-   ```c
-   ai_chat(prompt, response, sizeof(response));
-   ```
+### 文件变更
 
-2. **解析AI返回**
-   ```c
-   parse_ai_response(response, &to_npc, &message, &memory);
-   ```
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `user/lib/arch/riscv/syscall_ids.h.in` | 修改 | 添加AI聊天和记忆系统调用号(487-489) |
+| `os/syscall_ids.h` | 修改 | 添加内核系统调用号 |
+| `os/npc_memory.h` | 新增 | NPC记忆管理头文件 |
+| `os/npc_memory.c` | 新增 | NPC记忆管理实现(L2存储) |
+| `os/syscall.c` | 修改 | 添加3个新系统调用处理 |
+| `os/main.c` | 修改 | 初始化NPC记忆系统 |
+| `user/include/ai_sched.h` | 修改 | 添加用户态AI和记忆接口声明 |
+| `user/lib/ai_sched.c` | 修改 | 添加用户态接口实现 |
+| `user/src/ch11_npc.c` | 修改 | AI驱动thinking线程+三级记忆 |
+| `user/src/ch11_world.c` | 修改 | 更新阶段三说明 |
 
-3. **三级记忆**
-   - L1: 硬编码人设
-   - L2: `npc_memory_save()` / `npc_memory_load()`
-   - L3: 进程内 `session_history[]` 数组
+### 新增系统调用
+
+| 系统调用 | ID | 参数 | 功能 |
+|---------|----|----|------|
+| npc_ai_chat | 487 | (prompt, response, maxlen) | 用户态调用内核AI API |
+| npc_memory_save | 488 | (npc_id, content, len) | 保存L2记忆到内核 |
+| npc_memory_load | 489 | (npc_id, buf, maxlen) | 从内核读取L2记忆 |
+
+### 三级记忆系统实现
+
+#### L1: 人设 (硬编码)
+```c
+static const char *L1_PERSONAS[NPC_COUNT] = {
+    "你是NPC1，性格外向热情，喜欢主动和别人交流。说话简短友好(20字以内)。",
+    "你是NPC2，性格内向沉稳，喜欢思考问题。说话简短有深度(20字以内)。",
+    "你是NPC3，性格幽默风趣，喜欢开玩笑。说话简短有趣(20字以内)。"
+};
+```
+
+#### L2: AI记忆 (内核存储)
+```c
+/* os/npc_memory.c */
+struct npc_memory {
+    int npc_id;
+    char l2_memory[2048];
+    int l2_len;
+};
+static struct npc_memory g_memories[8];
+
+/* 用户态接口 */
+int npc_memory_save(int npc_id, const char *content, int len);
+int npc_memory_load(int npc_id, char *buf, int maxlen);
+```
+
+#### L3: 会话历史 (进程内存)
+```c
+/* user/src/ch11_npc.c */
+struct npc_shared {
+    char l3_history[512];  /* L3会话历史 */
+    int l3_len;
+    /* ... */
+};
+```
+
+### AI响应格式解析
+
+AI响应格式：
+```
+[to npc2]: 你好！今天怎么样？
+[memory]: npc2是个有趣的人
+```
+
+解析函数：
+```c
+static int parse_ai_response(const char *response,
+                             char *message, int msg_maxlen,
+                             char *memory, int mem_maxlen)
+{
+    /* 查找 [to npcX] 或 [to none] */
+    /* 提取消息内容 */
+    /* 查找 [memory]: 提取记忆内容 */
+    return target_npc;  /* 目标NPC ID, -1表示none, 0表示解析失败 */
+}
+```
+
+### Prompt构建
+
+```c
+static int build_ai_prompt(struct npc_shared *shared, char *prompt, int maxlen,
+                           const char *situation)
+{
+    /* L1: 人设 */
+    str_append(prompt, L1_PERSONAS[shared->npc_id - 1]);
+
+    /* L2: 从内核加载记忆 */
+    npc_memory_load(shared->npc_id, l2_memory, sizeof(l2_memory));
+    str_append(prompt, "你的记忆: ");
+    str_append(prompt, l2_memory);
+
+    /* L3: 会话历史 */
+    str_append(prompt, "最近对话: ");
+    str_append(prompt, shared->l3_history);
+
+    /* 当前情况 + 输出格式要求 */
+    str_append(prompt, "现在情况: ");
+    str_append(prompt, situation);
+    str_append(prompt, "请用以下格式回复...");
+}
+```
+
+### Thinking线程AI调用流程
+
+```c
+static void thinking_thread(void *arg)
+{
+    while (shared->running) {
+        if (should_think && !shared->has_pending_send) {
+            /* 1. 构建情况描述 */
+            /* 2. 构建AI prompt (L1+L2+L3+situation) */
+            build_ai_prompt(shared, prompt, sizeof(prompt), situation);
+
+            /* 3. 释放锁后调用AI (耗时操作) */
+            mutex_unlock(shared->mutex_id);
+            int ai_ret = npc_ai_chat(prompt, ai_response, sizeof(ai_response));
+            mutex_lock(shared->mutex_id);
+
+            /* 4. 解析AI响应 */
+            target_npc = parse_ai_response(ai_response, message, memory);
+
+            /* 5. 设置待发消息 */
+            if (target_npc > 0) {
+                str_copy(shared->outbox, message, sizeof(shared->outbox));
+                shared->has_pending_send = 1;
+            }
+
+            /* 6. 设置待保存记忆 */
+            if (strlen(memory) > 0) {
+                str_copy(shared->pending_memory, memory);
+                shared->has_pending_memory = 1;
+            }
+        }
+    }
+}
+```
+
+### Memory线程L2保存流程
+
+```c
+static void memory_thread(void *arg)
+{
+    while (shared->running) {
+        if (shared->has_pending_memory) {
+            /* 保存到内核L2记忆区 */
+            npc_memory_save(shared->npc_id, shared->pending_memory, len);
+            shared->has_pending_memory = 0;
+        }
+    }
+}
+```
+
+### 预期运行输出
+
+```
+========================================
+ch11: NPC Social World Started
+ch11: Phase 3 - AI-driven + 3-level memory
+ch11: Spawning 3 NPCs...
+========================================
+
+[NPC 1] Born! argc=6 (AI-driven, 3-level memory)
+[NPC 1][thinking] Thread started (AI-driven)
+[NPC 1][memory] Thread started (L2 persistence)
+
+[NPC 1][thinking] Triggered randomly (proactive)
+[NPC 1][thinking] Calling AI...
+[NPC 1][thinking] AI response: [to npc2]: 你好啊！今天天气真好！
+[NPC 1][thinking] Decision: [to npc2]: 你好啊！今天天气真好！
+[NPC 1][comm] Sent to NPC 2 via pipe: "你好啊！今天天气真好！" (27 bytes)
+
+[NPC 2][perception] Received from NPC 1: "你好啊！今天天气真好！"
+[NPC 2][thinking] Triggered by new message
+[NPC 2][thinking] Calling AI...
+[NPC 2][thinking] AI response: [to npc1]: 是啊，心情也不错。[memory]: npc1很热情
+[NPC 2][thinking] Decision: [to npc1]: 是啊，心情也不错。
+[NPC 2][thinking] Memory to save: npc1很热情
+[NPC 2][memory] Saving to L2: "npc1很热情"
+[NPC 2][memory] L2 save OK (12 bytes)
+
+... (NPC们通过AI互相聊天) ...
+
+[NPC 1] Died after 50 loops (sent=5, recv=4, think=8, ai=6)
+========================================
+ch11: All NPCs dead, world ends
+========================================
+```
+
+### 技术要点
+
+1. **AI调用时释放锁**: AI调用可能耗时较长，为避免阻塞其他线程，调用前释放锁，调用后重新获取
+2. **AI失败回退**: 当AI API调用失败时，使用简单的固定回复
+3. **记忆追加模式**: L2记忆采用追加模式，新记忆添加在旧记忆后面
+4. **L3历史循环**: L3会话历史空间不足时清除旧历史

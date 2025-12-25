@@ -6,6 +6,7 @@
 #include "trap.h"
 #include "virtio.h"
 #include "ai_sched.h"
+#include "npc_memory.h"
 
 /* ch9: 网络协议栈函数声明 */
 extern void net_platform_init(void);
@@ -65,7 +66,7 @@ static void test_ai_api(void)
 	}
 
 	/* ch9: 使用中文测试 */
-	if (ai_chat("你好，请你介绍一下你自己", &resp) == 0 && resp.success) {
+	if (ai_chat("你好", &resp) == 0 && resp.success) {
 		printf("ch9: AI response: %s\n", resp.content);
 		ai_chat_response_free(&resp);
 	} else {
@@ -99,6 +100,9 @@ void main()
 
 	/* ch10: 初始化进化调度器 */
 	ai_sched_init();
+
+	/* ch11: 初始化NPC记忆系统 */
+	npc_memory_init();
 
 	load_init_app();
 	infof("start scheduler!");

@@ -82,3 +82,21 @@
   - 解决：不等待perception线程，进程退出时由内核清理
 - 设计文档：doc/ch11-npc-social.md、doc/ch11-impl-details.md
 - 待实现：阶段三(AI驱动+三级记忆)
+
+### 2025-12-26
+- 实现 ch11 NPC社交系统（阶段三：AI驱动决策+三级记忆）
+  - 新增系统调用 npc_ai_chat(487)：用户态调用内核AI API
+  - 新增系统调用 npc_memory_save(488)：保存NPC的L2记忆到内核
+  - 新增系统调用 npc_memory_load(489)：从内核读取NPC的L2记忆
+  - 实现三级记忆系统：
+    - L1(人设)：硬编码的NPC性格模板（外向热情/内向沉稳/幽默风趣）
+    - L2(AI记忆)：内核存储，通过系统调用读写
+    - L3(会话历史)：进程内存，记录最近对话
+  - thinking线程改为AI驱动：构建prompt(L1+L2+L3+situation)，调用AI获取决策
+  - AI响应格式：`[to npcX]: 消息` 和 `[memory]: 记忆内容`
+  - 修复AI响应解析器：支持大小写（`[to NPC1]` 和 `[to npc1]` 均可识别）
+  - AI调用失败时的回退机制：简单回复"收到!"
+- 新增内核模块：os/npc_memory.c、os/npc_memory.h
+- 更新 user/Makefile：编译后自动复制 build/bin/* 到 target/bin/
+- 测试验证：NPC成功通过AI进行多轮对话
+

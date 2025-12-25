@@ -1,5 +1,6 @@
 /* ch11: NPC世界主进程 */
 /* 功能: 启动多个NPC进程，管理世界状态，创建NPC间通信管道 */
+/* 阶段三: AI驱动决策 + 三级记忆系统 */
 
 #include <stdio.h>
 #include <unistd.h>
@@ -46,7 +47,7 @@ int main(void)
 	printf("\n");
 	printf("========================================\n");
 	printf("ch11: NPC Social World Started\n");
-	printf("ch11: Four-thread architecture + Pipe IPC\n");
+	printf("ch11: Phase 3 - AI-driven + 3-level memory\n");
 	printf("ch11: Spawning %d NPCs...\n", NPC_COUNT);
 	printf("========================================\n\n");
 

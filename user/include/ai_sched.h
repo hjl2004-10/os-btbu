@@ -21,4 +21,11 @@ int npc_yield(void);
 /* ch11: IPC通知 - 告知内核发生了NPC间通信 */
 int npc_ipc_notify(int target_pid, int bytes);
 
+/* ch11: AI聊天 - 用户态调用内核AI API */
+int npc_ai_chat(const char *prompt, char *response, int resp_maxlen);
+
+/* ch11: 记忆系统 - L2记忆读写 */
+int npc_memory_save(int npc_id, const char *content, int len);
+int npc_memory_load(int npc_id, char *buf, int maxlen);
+
 #endif /* __AI_SCHED_H__ */
