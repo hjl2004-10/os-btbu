@@ -297,3 +297,4 @@
 #define SYS_npc_register 483
 #define SYS_npc_get_status 484
 #define SYS_npc_yield 485
+#define SYS_npc_ipc_notify 486

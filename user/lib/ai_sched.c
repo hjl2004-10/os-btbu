@@ -19,3 +19,9 @@ int npc_yield(void)
 {
 	return syscall(SYS_npc_yield);
 }
+
+/* ch11: IPC通知 - 告知内核发生了NPC间通信 */
+int npc_ipc_notify(int target_pid, int bytes)
+{
+	return syscall(SYS_npc_ipc_notify, target_pid, bytes);
+}

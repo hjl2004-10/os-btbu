@@ -153,20 +153,25 @@ uint64 sys_pipe(uint64 fdarray)
 	struct proc *p = curr_proc();
 	uint64 fd0, fd1;
 	struct file *f0, *f1;
-	if (f0 < 0 || f1 < 0) {
-		return -1;
-	}
 	f0 = filealloc();
 	f1 = filealloc();
+	if (f0 == NULL || f1 == NULL) {
+		if (f0) fileclose(f0);
+		if (f1) fileclose(f1);
+		return -1;
+	}
 	if (pipealloc(f0, f1) < 0)
 		goto err0;
 	fd0 = fdalloc(f0);
 	fd1 = fdalloc(f1);
 	if (fd0 < 0 || fd1 < 0)
 		goto err0;
-	if (copyout(p->pagetable, fdarray, (char *)&fd0, sizeof(fd0)) < 0 ||
-	    copyout(p->pagetable, fdarray + sizeof(uint64), (char *)&fd1,
-		    sizeof(fd1)) < 0) {
+	/* ch11: 修复：用户态传入int[2]数组，每个元素4字节 */
+	int fd0_int = (int)fd0;
+	int fd1_int = (int)fd1;
+	if (copyout(p->pagetable, fdarray, (char *)&fd0_int, sizeof(int)) < 0 ||
+	    copyout(p->pagetable, fdarray + sizeof(int), (char *)&fd1_int,
+		    sizeof(int)) < 0) {
 		goto err1;
 	}
 	return 0;
@@ -831,6 +836,14 @@ int sys_npc_yield(void)
 	return 0;
 }
 
+/* ch11: sys_npc_ipc_notify - 通知内核发生了NPC间通信 */
+int sys_npc_ipc_notify(int target_pid, int bytes)
+{
+	/* ch11: 调用ai_sched_add_ipc累加目标进程的IPC流量 */
+	ai_sched_add_ipc(target_pid, bytes);
+	return 0;
+}
+
 extern char trap_page[];
 
 void syscall()
@@ -969,6 +982,10 @@ void syscall()
 		break;
 	case SYS_npc_yield:
 		ret = sys_npc_yield();
+		break;
+	/* ch11: IPC通知系统调用 */
+	case SYS_npc_ipc_notify:
+		ret = sys_npc_ipc_notify(args[0], args[1]);
 		break;
 	default:
 		ret = -1;

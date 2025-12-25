@@ -18,4 +18,7 @@ int npc_register(int npc_id);
 int npc_get_status(void *st);
 int npc_yield(void);
 
+/* ch11: IPC通知 - 告知内核发生了NPC间通信 */
+int npc_ipc_notify(int target_pid, int bytes);
+
 #endif /* __AI_SCHED_H__ */

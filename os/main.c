@@ -65,7 +65,7 @@ static void test_ai_api(void)
 	}
 
 	/* ch9: 使用中文测试 */
-	if (ai_chat("你好", &resp) == 0 && resp.success) {
+	if (ai_chat("你好，请你介绍一下你自己", &resp) == 0 && resp.success) {
 		printf("ch9: AI response: %s\n", resp.content);
 		ai_chat_response_free(&resp);
 	} else {

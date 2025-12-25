@@ -68,6 +68,17 @@
   - 思考线程支持两种触发：收到消息触发、随机主动发起(20%概率)
   - 支持 [to none] 决策：NPC可选择不发送消息
   - 用户态程序：ch11_world（世界管理器）、ch11_npc（NPC四线程进程）
-  - 测试验证：4个线程正常启动运行，随机触发和消息模拟工作正常
-  - 设计文档：doc/ch11-npc-social.md、doc/ch11-impl-details.md
-  - 待实现：阶段二(管道通信)、阶段三(AI驱动+三级记忆)
+- 实现 ch11 NPC社交系统（阶段二：管道通信）
+  - 世界进程创建NPC间管道矩阵 pipes[from][to][2]
+  - 通过命令行参数传递管道fd给NPC子进程
+  - perception线程真正从管道读取消息
+  - communication线程真正通过管道发送消息
+  - 新增系统调用 npc_ipc_notify(486)：通知内核IPC流量用于奖励计算
+- 修复内核 sys_pipe() bug
+  - 修复数据类型不匹配：原代码用sizeof(uint64)写fd，但用户态int[2]期望sizeof(int)
+  - 修复未初始化变量检查：原代码比较未初始化指针
+- 修复 perception 线程阻塞退出问题
+  - 问题：piperead()在写端开着时会阻塞，而fork后其他进程持有写端
+  - 解决：不等待perception线程，进程退出时由内核清理
+- 设计文档：doc/ch11-npc-social.md、doc/ch11-impl-details.md
+- 待实现：阶段三(AI驱动+三级记忆)

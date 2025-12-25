@@ -1,11 +1,15 @@
 /* ch11: NPC四线程架构 */
 /* 功能: 感知、思考、沟通、记忆四线程并发运行 */
+/* 阶段二: 真正使用管道进行NPC间通信 */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <ai_sched.h>
+
+/* ch11: NPC数量 */
+#define NPC_COUNT 3
 
 /* ch11: 简单的字符串复制 */
 static void str_copy(char *dst, const char *src, int maxlen)
@@ -47,6 +51,17 @@ static void str_append(char *dst, const char *src)
 	dst[i] = '\0';
 }
 
+/* ch11: 简单的字符串转整数 */
+static int str_to_int(const char *s)
+{
+	int n = 0;
+	while (*s >= '0' && *s <= '9') {
+		n = n * 10 + (*s - '0');
+		s++;
+	}
+	return n;
+}
+
 /* ch11: NPC共享数据结构 */
 struct npc_shared {
 	/* ch11: 同步原语ID */
@@ -56,6 +71,14 @@ struct npc_shared {
 	/* ch11: NPC基本信息 */
 	int npc_id;
 	int running;
+
+	/* ch11: 管道fd数组 (阶段二新增) */
+	/* read_fds[i] = 从NPC i+1读取的fd (跳过自己) */
+	/* write_fds[i] = 写入NPC i+1的fd (跳过自己) */
+	int read_fds[NPC_COUNT - 1];
+	int write_fds[NPC_COUNT - 1];
+	int read_from_npc[NPC_COUNT - 1];	/* read_fds[i]对应的NPC ID */
+	int write_to_npc[NPC_COUNT - 1];	/* write_fds[i]对应的NPC ID */
 
 	/* ch11: 感知缓冲区 - 收到的消息 */
 	char inbox[256];
@@ -76,61 +99,77 @@ struct npc_shared {
 	int msg_sent;
 	int msg_recv;
 	int think_count;
+
+	/* ch11: 目标进程PID (用于IPC奖励) */
+	int target_pids[NPC_COUNT];	/* target_pids[npc_id-1] = pid */
 };
 
 /* ch11: 全局共享数据 */
 static struct npc_shared g_shared;
 
-/* ch11: 简单的字符串转整数 */
-static int str_to_int(const char *s)
+/* ch11: 根据NPC ID找到写fd索引 */
+static int find_write_fd_idx(struct npc_shared *shared, int target_npc)
 {
-	int n = 0;
-	while (*s >= '0' && *s <= '9') {
-		n = n * 10 + (*s - '0');
-		s++;
+	int i;
+	for (i = 0; i < NPC_COUNT - 1; i++) {
+		if (shared->write_to_npc[i] == target_npc)
+			return i;
 	}
-	return n;
+	return -1;
 }
 
-/* ch11: 感知线程 - 检查管道接收消息 */
+/* ch11: 感知线程 - 从管道读取消息 */
 static void perception_thread(void *arg)
 {
 	struct npc_shared *shared = (struct npc_shared *)arg;
 	int loop = 0;
+	int i;
+	char buf[256];
 
 	printf("[NPC %d][perception] Thread started\n", shared->npc_id);
 
 	while (shared->running) {
-		mutex_lock(shared->mutex_id);
+		/* ch11: 轮询所有读管道 */
+		for (i = 0; i < NPC_COUNT - 1 && shared->running; i++) {
+			int fd = shared->read_fds[i];
+			if (fd < 0)
+				continue;
 
-		/* ch11: 阶段一暂时模拟，阶段二会真正从管道读取 */
-		/* 目前只是周期性检查并模拟偶尔收到消息 */
-		if (loop % 10 == 5 && !shared->has_new_msg) {
-			/* ch11: 模拟收到来自其他NPC的消息 */
-			int from = (shared->npc_id % 3) + 1;
-			if (from == shared->npc_id)
-				from = (from % 3) + 1;
+			/* ch11: 读取管道 - 当fd被关闭时read会返回错误 */
+			int n = read(fd, buf, sizeof(buf) - 1);
+			if (n > 0) {
+				buf[n] = '\0';
+				mutex_lock(shared->mutex_id);
+				if (!shared->has_new_msg) {
+					str_copy(shared->inbox, buf, sizeof(shared->inbox));
+					shared->inbox_len = n;
+					shared->inbox_from = shared->read_from_npc[i];
+					shared->has_new_msg = 1;
+					shared->msg_recv++;
 
-			str_copy(shared->inbox, "Hello from simulation!", sizeof(shared->inbox));
-			shared->inbox_len = strlen(shared->inbox);
-			shared->inbox_from = from;
-			shared->has_new_msg = 1;
-			shared->msg_recv++;
+					printf("[NPC %d][perception] Received from NPC %d: \"%s\"\n",
+						shared->npc_id, shared->inbox_from, shared->inbox);
 
-			printf("[NPC %d][perception] Simulated msg from NPC %d\n",
-				shared->npc_id, from);
-
-			/* ch11: 通知thinking线程 */
-			condvar_signal(shared->cond_id);
+					/* ch11: 通知thinking线程 */
+					condvar_signal(shared->cond_id);
+				}
+				mutex_unlock(shared->mutex_id);
+			} else if (n < 0) {
+				/* ch11: read错误(fd已关闭)，退出循环 */
+				break;
+			}
+			/* ch11: n == 0 表示没有数据，继续轮询 */
 		}
 
-		mutex_unlock(shared->mutex_id);
+		/* ch11: 检查是否应该退出 */
+		if (!shared->running)
+			break;
 
 		sched_yield();
 		loop++;
 
 		/* ch11: 限制循环次数 */
-		if (loop > 50)
+		if (loop > 100)
 			break;
 	}
 
@@ -182,7 +221,7 @@ static void thinking_thread(void *arg)
 				/* ch11: 随机选择目标或[to none] */
 				int r = rand() % 4;
 				if (r == 0) {
-					/* 20%概率不发消息 */
+					/* 25%概率不发消息 */
 					shared->outbox_to = -1;
 					printf("[NPC %d][thinking] Decision: [to none]\n",
 						shared->npc_id);
@@ -211,18 +250,12 @@ static void thinking_thread(void *arg)
 			shared->inbox_from = -1;
 		}
 
-		/* ch11: 如果没事做，等待条件变量 */
-		if (!should_think) {
-			/* ch11: 带超时的等待，避免死锁 */
-			/* 这里简单处理：不等待，直接循环 */
-		}
-
 		mutex_unlock(shared->mutex_id);
 
 		sched_yield();
 		loop++;
 
-		if (loop > 50)
+		if (loop > 100)
 			break;
 	}
 
@@ -231,7 +264,7 @@ static void thinking_thread(void *arg)
 	exit(0);
 }
 
-/* ch11: 沟通线程 - 发送消息(阶段一模拟,阶段二写管道) */
+/* ch11: 沟通线程 - 通过管道发送消息 */
 static void communication_thread(void *arg)
 {
 	struct npc_shared *shared = (struct npc_shared *)arg;
@@ -243,17 +276,38 @@ static void communication_thread(void *arg)
 		mutex_lock(shared->mutex_id);
 
 		if (shared->has_pending_send && shared->outbox_to > 0) {
-			/* ch11: 阶段一模拟发送，阶段二会写入管道 */
-			printf("[NPC %d][comm] Sending to NPC %d: \"%s\"\n",
-				shared->npc_id, shared->outbox_to, shared->outbox);
+			/* ch11: 找到目标NPC的写fd */
+			int idx = find_write_fd_idx(shared, shared->outbox_to);
+			if (idx >= 0 && shared->write_fds[idx] >= 0) {
+				/* ch11: 通过管道发送消息 */
+				int n = write(shared->write_fds[idx],
+					shared->outbox, shared->outbox_len);
 
-			shared->msg_sent++;
+				if (n > 0) {
+					printf("[NPC %d][comm] Sent to NPC %d via pipe: \"%s\" (%d bytes)\n",
+						shared->npc_id, shared->outbox_to, shared->outbox, n);
+
+					/* ch11: 触发IPC奖励 */
+					int target_pid = shared->target_pids[shared->outbox_to - 1];
+					if (target_pid > 0) {
+						npc_ipc_notify(target_pid, n);
+						printf("[NPC %d][comm] IPC reward notified (target_pid=%d)\n",
+							shared->npc_id, target_pid);
+					}
+
+					shared->msg_sent++;
+				} else {
+					printf("[NPC %d][comm] Write failed to NPC %d\n",
+						shared->npc_id, shared->outbox_to);
+				}
+			} else {
+				printf("[NPC %d][comm] No pipe to NPC %d\n",
+					shared->npc_id, shared->outbox_to);
+			}
+
 			shared->has_pending_send = 0;
 			shared->outbox_to = -1;
 			shared->outbox_len = 0;
-
-			/* ch11: 模拟IPC奖励 - 真实实现会调用npc_ipc_notify */
-			printf("[NPC %d][comm] IPC reward triggered\n", shared->npc_id);
 		} else if (shared->has_pending_send && shared->outbox_to < 0) {
 			/* ch11: [to none] 不发送 */
 			shared->has_pending_send = 0;
@@ -264,7 +318,7 @@ static void communication_thread(void *arg)
 		sched_yield();
 		loop++;
 
-		if (loop > 50)
+		if (loop > 100)
 			break;
 	}
 
@@ -291,7 +345,7 @@ static void memory_thread(void *arg)
 		sched_yield();
 		loop++;
 
-		if (loop > 50)
+		if (loop > 100)
 			break;
 	}
 
@@ -305,15 +359,77 @@ int main(int argc, char *argv[])
 	struct npc_status st;
 	int t_percept, t_think, t_comm, t_memory;
 	int loop_count = 0;
+	int i, j;
 
-	/* ch11: 解析NPC ID */
+	/* ch11: 解析参数 */
+	/* argv[0] = "ch11_npc" */
+	/* argv[1] = npc_id */
+	/* argv[2..N] = read fds (N-1个) */
+	/* argv[N+1..2N-1] = write fds (N-1个) */
 	if (argc < 2) {
 		printf("[NPC ?] Error: no NPC ID provided\n");
 		return -1;
 	}
 	npc_id = str_to_int(argv[1]);
 
-	printf("[NPC %d] Born! Initializing 4-thread architecture...\n", npc_id);
+	printf("[NPC %d] Born! argc=%d\n", npc_id, argc);
+
+	/* ch11: 初始化共享数据 */
+	memset(&g_shared, 0, sizeof(g_shared));
+	g_shared.npc_id = npc_id;
+	g_shared.running = 1;
+	g_shared.inbox_from = -1;
+	g_shared.outbox_to = -1;
+
+	/* ch11: 解析管道fd */
+	/* 格式: ch11_npc <id> <r0> <r1> <w0> <w1> */
+	/* 对于NPC 1: r0=从NPC2读, r1=从NPC3读, w0=写到NPC2, w1=写到NPC3 */
+	int expected_argc = 2 + 2 * (NPC_COUNT - 1);  /* id + reads + writes */
+	if (argc >= expected_argc) {
+		int arg_idx = 2;
+		int fd_idx = 0;
+
+		/* ch11: 读fd - 来自其他NPC */
+		for (i = 1; i <= NPC_COUNT; i++) {
+			if (i != npc_id) {
+				g_shared.read_fds[fd_idx] = str_to_int(argv[arg_idx]);
+				g_shared.read_from_npc[fd_idx] = i;
+				printf("[NPC %d] read_fd[%d]=%d (from NPC %d)\n",
+					npc_id, fd_idx, g_shared.read_fds[fd_idx], i);
+				fd_idx++;
+				arg_idx++;
+			}
+		}
+
+		/* ch11: 写fd - 发送给其他NPC */
+		fd_idx = 0;
+		for (i = 1; i <= NPC_COUNT; i++) {
+			if (i != npc_id) {
+				g_shared.write_fds[fd_idx] = str_to_int(argv[arg_idx]);
+				g_shared.write_to_npc[fd_idx] = i;
+				printf("[NPC %d] write_fd[%d]=%d (to NPC %d)\n",
+					npc_id, fd_idx, g_shared.write_fds[fd_idx], i);
+				fd_idx++;
+				arg_idx++;
+			}
+		}
+	} else {
+		printf("[NPC %d] Warning: No pipe fds provided (argc=%d, expected=%d)\n",
+			npc_id, argc, expected_argc);
+		/* ch11: 没有管道时设置为-1 */
+		for (i = 0; i < NPC_COUNT - 1; i++) {
+			g_shared.read_fds[i] = -1;
+			g_shared.write_fds[i] = -1;
+		}
+	}
+
+	/* ch11: 初始化目标PID (简化: 假设按顺序fork，pid从3开始) */
+	/* 实际应该通过world传递或查询 */
+	for (i = 0; i < NPC_COUNT; i++) {
+		g_shared.target_pids[i] = 3 + i;  /* NPC 1=pid 3, NPC 2=pid 4, ... */
+	}
+
+	printf("[NPC %d] Initializing 4-thread architecture...\n", npc_id);
 
 	/* ch11: 初始化随机数种子 */
 	srand(npc_id * 12345 + get_mtime());
@@ -323,13 +439,6 @@ int main(int argc, char *argv[])
 		printf("[NPC %d] Failed to register\n", npc_id);
 		return -1;
 	}
-
-	/* ch11: 初始化共享数据 */
-	memset(&g_shared, 0, sizeof(g_shared));
-	g_shared.npc_id = npc_id;
-	g_shared.running = 1;
-	g_shared.inbox_from = -1;
-	g_shared.outbox_to = -1;
 
 	/* ch11: 创建同步原语 */
 	g_shared.mutex_id = mutex_blocking_create();
@@ -379,6 +488,17 @@ int main(int argc, char *argv[])
 		if (st.my_prio <= 0) {
 			printf("[NPC %d] I'm dying... (prio=%d)\n", npc_id, st.my_prio);
 			g_shared.running = 0;
+			/* ch11: 立即关闭管道，让阻塞的read()返回 */
+			for (i = 0; i < NPC_COUNT - 1; i++) {
+				if (g_shared.read_fds[i] >= 0) {
+					close(g_shared.read_fds[i]);
+					g_shared.read_fds[i] = -1;
+				}
+				if (g_shared.write_fds[i] >= 0) {
+					close(g_shared.write_fds[i]);
+					g_shared.write_fds[i] = -1;
+				}
+			}
 			break;
 		}
 
@@ -387,19 +507,42 @@ int main(int argc, char *argv[])
 		loop_count++;
 
 		/* ch11: 限制最大轮数 */
-		if (loop_count > 60) {
+		if (loop_count > 120) {
 			printf("[NPC %d] Max loops reached\n", npc_id);
 			g_shared.running = 0;
+			/* ch11: 立即关闭管道 */
+			for (i = 0; i < NPC_COUNT - 1; i++) {
+				if (g_shared.read_fds[i] >= 0) {
+					close(g_shared.read_fds[i]);
+					g_shared.read_fds[i] = -1;
+				}
+				if (g_shared.write_fds[i] >= 0) {
+					close(g_shared.write_fds[i]);
+					g_shared.write_fds[i] = -1;
+				}
+			}
 			break;
 		}
 	}
 
 	/* ch11: 等待工作线程结束 */
+	/* ch11: 注意：perception线程可能阻塞在read()上，无法正常退出 */
+	/* ch11: 因为管道写端被其他进程持有，关闭自己的fd不会让read返回 */
+	/* ch11: 简化处理：等待一小段时间后直接退出，不等perception线程 */
 	printf("[NPC %d] Waiting for threads to exit...\n", npc_id);
-	waittid(t_percept);
+
+	/* ch11: 先等待不会阻塞的线程 */
 	waittid(t_think);
 	waittid(t_comm);
 	waittid(t_memory);
+
+	/* ch11: perception线程可能阻塞，给它几轮调度机会 */
+	for (i = 0; i < 5; i++) {
+		sched_yield();
+	}
+
+	/* ch11: 不再等待perception线程，直接退出 */
+	/* ch11: 进程退出时内核会清理所有线程 */
 
 	printf("[NPC %d] Died after %d loops (sent=%d, recv=%d, think=%d)\n",
 		npc_id, loop_count, g_shared.msg_sent, g_shared.msg_recv,
