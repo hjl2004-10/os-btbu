@@ -666,3 +666,144 @@ ch11: All NPCs dead, world ends
 2. **AI失败回退**: 当AI API调用失败时，使用简单的固定回复
 3. **记忆追加模式**: L2记忆采用追加模式，新记忆添加在旧记忆后面
 4. **L3历史循环**: L3会话历史空间不足时清除旧历史
+
+### 遇到的技术问题
+
+#### 问题1: AI响应解析大小写不匹配
+**现象**: AI返回`[to NPC1]`(大写)，但解析器只识别`[to npc1]`(小写)，导致解析失败。
+
+**日志**:
+```
+[NPC 1][thinking] AI response: [to NPC2]: 嘿，今天天气真不错！
+[NPC 1][thinking] AI response parse failed
+```
+
+**解决**: 添加大小写不敏感的字符串查找函数：
+```c
+/* ch11: 转小写 */
+static char to_lower(char c)
+{
+    if (c >= 'A' && c <= 'Z')
+        return c + ('a' - 'A');
+    return c;
+}
+
+/* ch11: 查找字符串(忽略大小写) */
+static char *str_find_i(const char *haystack, const char *needle)
+{
+    for (; *haystack; haystack++) {
+        const char *h = haystack;
+        const char *n = needle;
+        while (*h && *n && to_lower(*h) == to_lower(*n)) {
+            h++; n++;
+        }
+        if (!*n) return (char *)haystack;
+    }
+    return 0;
+}
+```
+修改`parse_ai_response()`使用`str_find_i()`和`to_lower()`进行匹配。
+
+#### 问题2: 对话上下文混乱 - NPC回复错误的对象
+**现象**: NPC收到A的消息，却回复给B。对话逻辑不连贯。
+
+**原因分析**:
+1. AI prompt没有明确告诉AI"这条消息来自谁，你应该回复谁"
+2. 所有NPC的会话历史混在一起，AI无法区分对话对象
+3. 类似微信场景：收到某人消息时，应该进入与该人的对话空间
+
+**解决**: 给`build_ai_prompt()`添加`reply_to`参数：
+```c
+/* reply_to: 回复目标NPC ID, 0表示主动发起聊天 */
+static int build_ai_prompt(struct npc_shared *shared, char *prompt, int maxlen,
+                           const char *situation, int reply_to)
+{
+    /* ... L1/L2/L3 ... */
+
+    /* 根据reply_to区分回复和主动发起 */
+    if (reply_to > 0) {
+        /* 收到消息，必须回复发送者 */
+        str_append(prompt, "你必须回复NPC");
+        append_int(prompt, reply_to);
+        str_append(prompt, "，格式:\n");
+        str_append(prompt, "[to npc");
+        append_int(prompt, reply_to);
+        str_append(prompt, "]: 你的回复\n");
+    } else {
+        /* 主动发起聊天，可选择目标 */
+        str_append(prompt, "[to npc数字]: 你要说的话\n");
+    }
+}
+```
+
+调用处传入正确的`reply_to`：
+```c
+/* thinking_thread */
+int reply_to = 0;
+if (shared->has_new_msg && shared->inbox_from > 0) {
+    reply_to = shared->inbox_from;  /* 回复消息发送者 */
+}
+build_ai_prompt(shared, prompt, sizeof(prompt), situation, reply_to);
+```
+
+**效果**: 修复后NPC能正确回复消息发送者：
+```
+NPC1 -> NPC2: "嘿，今天天气真不错！"
+NPC2 -> NPC1: "嗯，阳光让人沉思。"  ✓ 正确回复NPC1
+NPC1 -> NPC2: "是啊，适合散步聊天！" ✓ 正确回复NPC2
+
+NPC3 -> NPC1: "嘿，你头发上有片叶子！骗你的啦。"
+NPC1 -> NPC3: "哈哈，被你骗到啦！"  ✓ 正确回复NPC3(而不是NPC2)
+```
+
+#### 问题3: 网络连接偶发失败
+**现象**: 并发AI调用时偶尔出现TCP连接失败。
+
+**日志**:
+```
+[ERROR 5-2]open error: 1
+[ERROR 5-2]http: tcp_connect failed
+[ERROR 5-2]pcb not found
+[NPC 3][thinking] AI call failed (ret=-1)
+```
+
+**原因**: 内核TCP协议栈资源有限(PCB数量)，多个NPC同时调用AI API可能耗尽资源。
+
+**当前处理**: AI调用失败时触发回退机制，使用固定回复：
+```c
+if (ai_ret < 0) {
+    /* AI失败时使用简单回退逻辑 */
+    if (shared->has_new_msg && shared->inbox_from > 0) {
+        shared->outbox_to = shared->inbox_from;
+        str_append(shared->outbox, "收到!");
+        shared->has_pending_send = 1;
+    }
+}
+```
+
+**后续优化方向**:
+- 增加TCP PCB池大小
+- 添加AI调用重试机制
+- 考虑NPC间AI调用串行化
+
+#### 问题4: Makefile编译后二进制文件缺失
+**现象**: 执行`make user BASE=1 CHAPTER=11`后，`target/bin/`目录只包含ch11相关文件，其他章节的二进制文件（如usershell）缺失，导致无法正常运行。
+
+**原因**: 原Makefile只复制`CH_TESTS`匹配的文件：
+```makefile
+target: binary del
+    @$(foreach t, $(CH_TESTS), cp $(bin_dir)/$(t)* $(out_dir)/bin/;)
+```
+当`CHAPTER=11`时，`CH_TESTS`只包含`ch11_`前缀的文件。
+
+**解决**: 在target规则末尾添加复制所有编译产物的命令：
+```makefile
+target: binary del
+    @echo tests=$(CH_TESTS)
+    @$(foreach t, $(CH_TESTS), cp $(bin_dir)/$(t)* $(out_dir)/bin/;)
+    @$(foreach t, $(CH_TESTS), cp $(elf_dir)/$(t)* $(out_dir)/elf/;)
+    @echo "Copying all binaries from build/bin to target/bin..."
+    @cp -f $(bin_dir)/* $(out_dir)/bin/ 2>/dev/null || true
+```
+
+**效果**: 无论指定哪个章节，`target/bin/`都会包含`build/bin/`中的所有二进制文件，确保usershell等基础程序可用。

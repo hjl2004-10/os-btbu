@@ -249,8 +249,9 @@ static int parse_ai_response(const char *response,
 }
 
 /* ch11: 阶段三 - 构建AI prompt */
+/* reply_to: 回复目标NPC ID, 0表示主动发起聊天 */
 static int build_ai_prompt(struct npc_shared *shared, char *prompt, int maxlen,
-			   const char *situation)
+			   const char *situation, int reply_to)
 {
 	char l2_memory[L2_MEMORY_SIZE];
 	int len = 0;
@@ -268,7 +269,7 @@ static int build_ai_prompt(struct npc_shared *shared, char *prompt, int maxlen,
 		str_append(prompt, "\n");
 	}
 
-	/* ch11: L3会话历史 */
+	/* ch11: L3会话历史 - 只显示与当前对话者相关的 */
 	if (shared->l3_len > 0) {
 		str_append(prompt, "最近对话: ");
 		str_append(prompt, shared->l3_history);
@@ -280,10 +281,22 @@ static int build_ai_prompt(struct npc_shared *shared, char *prompt, int maxlen,
 	str_append(prompt, situation);
 	str_append(prompt, "\n");
 
-	/* ch11: 输出格式要求 */
-	str_append(prompt, "请用以下格式回复(只回复一行):\n");
-	str_append(prompt, "[to npc数字]: 你要说的话\n");
-	str_append(prompt, "或者 [to none]: 不说话\n");
+	/* ch11: 输出格式要求 - 根据reply_to区分回复和主动发起 */
+	if (reply_to > 0) {
+		/* ch11: 收到消息，必须回复发送者 */
+		str_append(prompt, "你必须回复NPC");
+		append_int(prompt, reply_to);
+		str_append(prompt, "，格式:\n");
+		str_append(prompt, "[to npc");
+		append_int(prompt, reply_to);
+		str_append(prompt, "]: 你的回复\n");
+		str_append(prompt, "或者 [to none]: 不回复\n");
+	} else {
+		/* ch11: 主动发起聊天，可选择目标 */
+		str_append(prompt, "请用以下格式回复(只回复一行):\n");
+		str_append(prompt, "[to npc数字]: 你要说的话\n");
+		str_append(prompt, "或者 [to none]: 不说话\n");
+	}
 	str_append(prompt, "可选: [memory]: 你想记住的事\n");
 
 	return strlen(prompt);
@@ -410,8 +423,12 @@ static void thinking_thread(void *arg)
 			shared->think_count++;
 
 			/* ch11: 阶段三 - 构建当前情况描述 */
+			/* ch11: reply_to = 回复目标, 0表示主动发起 */
+			int reply_to = 0;
 			situation[0] = '\0';
 			if (shared->has_new_msg && shared->inbox_from > 0) {
+				/* ch11: 收到消息，需要回复发送者 */
+				reply_to = shared->inbox_from;
 				str_append(situation, "NPC");
 				append_int(situation, shared->inbox_from);
 				str_append(situation, "对你说: ");
@@ -426,6 +443,7 @@ static void thinking_thread(void *arg)
 				str_append(l3_entry, shared->inbox);
 				append_to_l3(shared, l3_entry);
 			} else {
+				/* ch11: 主动发起，reply_to保持为0 */
 				str_append(situation, "你想主动找人聊天。可选目标: ");
 				int first = 1;
 				for (int j = 1; j <= NPC_COUNT; j++) {
@@ -438,8 +456,8 @@ static void thinking_thread(void *arg)
 				}
 			}
 
-			/* ch11: 阶段三 - 构建AI prompt */
-			build_ai_prompt(shared, prompt, sizeof(prompt), situation);
+			/* ch11: 阶段三 - 构建AI prompt，传入reply_to */
+			build_ai_prompt(shared, prompt, sizeof(prompt), situation, reply_to);
 
 			printf("[NPC %d][thinking] Calling AI...\n", shared->npc_id);
 
