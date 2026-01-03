@@ -32,7 +32,107 @@
 3. **增加原创结构图**：文件系统层次图、硬链接示意图
 4. **记录真实探索过程**：nlink字段的发现与添加过程
 
----
+### nfs 文件系统中的 inode 与目录存储机制详解
+
+#### 1. NINODE 与 NINODES 的区别
+
+| 常量        | 值   | 定义位置             | 含义说明 |
+|-------------|------|----------------------|----------|
+| `NINODE`    | 50   | `fs.h`, `os/fs.h`    | 内存中活动 inode 缓存表的最大容量（运行时常量） |
+| `NINODES`   | 200  | `nfs/fs.c`（mkfs 工具） | 磁盘上 inode 区域的总容量（磁盘常量） |
+
+- `NINODE = 50` 
+  - 控制内核在内存中同时缓存的活跃 inode 数量。
+  - 不影响磁盘布局，仅用于运行时性能优化。
+
+- `NINODES = 200`
+  - 决定文件系统最多可创建 200 个文件。
+  - 影响磁盘布局：inode 区域占用 $ \lceil 200 / 16 \rceil = 13 $ 个块（每块 1024 字节，每个 inode 64 字节）。
+  - 写入超级块字段 `sb.ninodes = 200`。
+
+> ✅ 结论：计算磁盘布局时应使用 `NINODES = 200`。
+
+#### 2. 目录是如何存储的？
+
+##### 目录本质是特殊文件
+- 在 nfs 中，目录是一种类型为 `T_DIR` 的文件。
+- 其内容是一系列 `struct dirent` 结构组成的数组。
+
+```c
+#define DIRSIZ 14
+struct dirent {
+    ushort inum;          // 对应文件/子目录的 inode 编号
+    char name[DIRSIZ];    // 文件名（最多 14 字符）
+};
+```
+- 每个 `dirent` 占用 16 字节（2 + 14）。
+- 一个数据块（1024 字节）可容纳 64 个目录项。
+
+##### 存储位置：数据块区域（非专用区域）
+- 没有专门的“目录块”。
+- 目录内容存放在普通数据块中，由其 inode 的 `addrs[]` 数组指向。
+- 例如：根目录（inode #1）的数据可能存放在块 141。
+
+##### mkfs 创建根目录的过程
+1. 调用 `ialloc(T_DIR)` 分配根目录 inode（ino=1）。
+2. 对每个用户文件：
+   - 分配文件 inode（如 ino=2,3,...）
+   - 构造 `dirent{inum, name}`
+   - 调用 `iappend(rootino, &de, sizeof(de))` 将目录项写入根目录的数据块。
+3. `iappend()` 动态分配数据块：
+   - 若当前 inode 的 size 需要新块，则从 `freeblock`（起始于 141）分配。
+   - 数据写入该块。
+
+> 关键点：目录项块不是预先分配的，而是在 `iappend()` 时从数据块区域动态分配。
+
+#### 3. mkfs 是否预留了目录项块？
+
+答案：没有。
+
+##### mkfs 的磁盘布局计算
+```c
+nmeta = 2 (boot+super) + 13 (inode blocks) + 126 (bitmap blocks) = 141
+nblocks = FSSIZE (1000) - nmeta = 859  // 数据块数量
+freeblock = nmeta = 141                // 数据块起始编号
+```
+
+- 仅 inode 区域（13 块）是预分配并清零的。
+- 目录项和文件内容共用数据块区域（块 141 ~ 999）。
+- 第一次调用 `iappend(rootino, ...)` 时才分配第一个目录项块（如块 141）。
+
+##### 示例：添加三个文件 `init`, `sh`, `cat`
+| 操作 | 分配块 | 内容 |
+|------|--------|------|
+| `iappend(root, init_dirent)` | 141 | 根目录项 #1 |
+| `iappend(root, sh_dirent)`   | 141 | 根目录项 #2（追加）|
+| `iappend(root, cat_dirent)`  | 141 | 根目录项 #3（追加）|
+| `iappend(init_inode, data)`  | 142 | init 文件内容 |
+| `iappend(sh_inode, data)`    | 143 | sh 文件内容 |
+| `iappend(cat_inode, data)`   | 144 | cat 文件内容 |
+
+> 所有目录项都存放在普通数据块中，由根目录 inode 管理。
+
+#### 4. 设计哲学：一切皆文件
+
+| 特性         | 普通文件 (`T_FILE`)      | 目录文件 (`T_DIR`)        |
+|--------------|--------------------------|----------------------------|
+| inode.type   | 2                        | 1                          |
+| 数据内容     | 用户数据                 | `dirent` 结构数组          |
+| 存储位置     | 数据块区域               | 数据块区域                 |
+| 访问方式     | 通过 inode 读写字节流    | 通过 inode 读取目录项      |
+
+- **统一抽象**：文件与目录均由 inode + 数据块构成。
+- **无特殊区域**：无需为目录预留专用磁盘空间。
+- **动态扩展**：目录大小随内容增长，按需分配数据块。
+
+#### 5. 小结
+
+- `NINODES = 200` 决定磁盘 inode 容量，用于布局计算。
+- `NINODE = 50`仅控制内存缓存，不影响磁盘。
+- 目录是文件，其内容（`dirent` 数组）存放在普通数据块中。
+- mkfs 不预分配目录项块，而是在写入时从数据块区域动态分配。
+- 这种设计简洁高效，体现了 Unix “一切皆文件” 的核心思想。
+
 
 ## 一、实验环境与运行
 
@@ -137,7 +237,7 @@ Usertests: Test ch6_file3 in Process 75 exited with code 0
 
 **【原创结构图1：文件系统层次抽象图】**
 
-![](A:\1ai浏览器\未标题-3.png)
+![image-20260103202227766](C:\Users\dihao\AppData\Roaming\Typora\typora-user-images\image-20260103202227766.png)
 
 ### 2.3 "一切皆文件"的设计理念
 
@@ -224,7 +324,6 @@ nfs 文件系统的磁盘布局如下：
 基本参数：
 - 块大小 BSIZE = 1024 字节
 - 总容量 FSSIZE = 1000 个块
-- inode 上限 = 200 个
 
 ### 4.2 核心数据结构
 
@@ -532,7 +631,7 @@ if (dirlink(dp, newpath, ip->inum) < 0) {
 
 ## 八、验证截图
 
-![image-20260103053032097](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\image-20260103053032097.png)
+![image-20260103174417053](C:\Users\dihao\AppData\Roaming\Typora\typora-user-images\image-20260103174417053.png)
 
 测试结果显示：
  Usertests: Test ch6_file3 in Process 75 exited with code 0

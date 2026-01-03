@@ -181,7 +181,7 @@ os-btbu/
   - 修复AI响应解析器：支持大小写（`[to NPC1]` 和 `[to npc1]` 均可识别）
   - AI调用失败时的回退机制：简单回复"收到!"
 - 新增内核模块：os/npc_memory.c、os/npc_memory.h
-- 优化 user/Makefile：运行 `make BASE=1 CHAPTER=x` 后自动将 build/bin 复制到 target/bin，无需手动复制
+- 优化 user/Makefile：运行 `make BASE=1 CHAPTER=x` 后自动将 build/bin 复制到 target/bin，可快速在一个代码仓库的情况下验证多个系统实现（user应用和测例）
 - 测试验证：NPC成功通过AI进行多轮对话
 - 待实现（阶段二：情绪的演化）（阶段三：性格的演化）
 - 待实现ch13 NPC社交（关系模式构建，同学，师生，亲子等简易模式）系统

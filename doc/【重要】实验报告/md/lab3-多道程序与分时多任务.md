@@ -29,10 +29,11 @@
 
 **本报告的特点**：
 
-1. **不是照搬指导书**：每个概念都用自己的话解释，体现"不懂 → 探索 → 理解"的过程
+1. **过程性**：每个概念都用自己的理解，体现学习的过程
 2. **增加可视化内容**：内存布局图、进程切换流程图、系统调用流程图
 3. **记录真实问题**：数组大小设为 256 导致越界、计数时机放错位置等排查过程
 4. **前后呼应**：从 Lab2 批处理系统的局限引出本章的问题，形成知识串联
+5. **深入技术细节**：对 sys_trace 进行三重层次的讲解（实现原理、安全机制、应用场景）
 
 ---
 
@@ -356,37 +357,6 @@ char trapframe[NPROC][PAGE_SIZE];
 
 这种设计的优点是简单，缺点是进程数量固定。不过对于学习操作系统原理来说已经足够了。
 
-### 4.4 进程分配：allocproc
-
-```c
-// os/proc.c
-
-struct proc *allocproc()
-{
-    struct proc *p;
-    for (p = pool; p < &pool[NPROC]; p++) {
-        if (p->state == UNUSED) {
-            goto found;
-        }
-    }
-    return 0;  // 没有空闲进程槽
-
-found:
-    p->pid = allocpid();
-    p->state = USED;
-    memset(&p->context, 0, sizeof(p->context));
-    memset(p->trapframe, 0, PAGE_SIZE);
-    memset((void *)p->kstack, 0, PAGE_SIZE);
-    p->context.ra = (uint64)usertrapret;  // 第一次运行时的入口
-    p->context.sp = p->kstack + PAGE_SIZE;
-    return p;
-}
-```
-
-这里有个关键点：`p->context.ra = (uint64)usertrapret`
-
-这意味着进程第一次被调度时，会从 `usertrapret` 函数开始执行，这个函数会完成从内核态返回用户态的操作。
-
 ---
 
 ## 五、多道程序与协作式调度
@@ -468,9 +438,21 @@ swtch:
 
 由于 `swtch` 本质上是一次函数调用，所以只需要保存 callee-saved 寄存器。
 
+
+
 ### 5.4 idle 进程与 scheduler
 
-`idle` 是一个特殊的进程，它的作用是在没有其他进程可运行时"占位"，并负责调度其他进程。
+`idle` 是一个特殊的进程，它在系统中的作用类似于"调度器的容器"：
+
+1. **当没有其他进程可运行时，idle 进程"占位"运行**
+2. **当其他进程调用 yield() 让出 CPU 时，会切换回 idle 进程**
+3. **idle 进程执行 scheduler() 函数，寻找下一个可运行的进程**
+
+**关键理解**：idle 进程和 scheduler 函数是一个整体
+
+- scheduler() 函数在 idle 进程的上下文中运行
+- idle 进程的 `context.ra` 保存了 scheduler() 函数的执行位置
+- 每次切换回 idle 进程，都从 scheduler() 上次中断的位置继续执行
 
 ```c
 // os/proc.c
@@ -492,17 +474,60 @@ void scheduler(void)
 ```
 
 调度逻辑很简单：
+
 1. 遍历进程池，找到状态为 `RUNNABLE` 的进程
 2. 设置为 `RUNNING`，更新 `current_proc`
 3. 切换到该进程执行
 
 当进程调用 `yield()` 时，会切换回 `idle` 进程，然后 `scheduler` 继续寻找下一个可运行的进程。
 
-### 5.5 进程切换的完整流程
+** 总结：**
+**idle 进程与scheduler 的关系**：
 
-**【原创结构图1：进程切换流程图】**
+1. **idle 进程是容器**：提供进程上下文（context）来保存 scheduler() 的执行状态
 
-![ChatGPT Image 2026年1月3日 03_48_00](C:\Users\Administrator\Downloads\ChatGPT Image 2026年1月3日 03_48_00.png)
+2. **scheduler() 是内容**：在 idle 进程的上下文中运行的调度逻辑
+
+3. **swtch() 是开关**：在 idle 进程和普通进程之间切换
+
+4. **idle.context.ra 是书签**：记录 scheduler() 被暂停的位置
+
+### 5.5 进程分配：allocproc
+
+   ```c
+   // os/proc.c
+   
+   struct proc *allocproc()
+   {
+       struct proc *p;
+       for (p = pool; p < &pool[NPROC]; p++) {
+           if (p->state == UNUSED) {
+               goto found;
+           }
+       }
+       return 0;  // 没有空闲进程槽
+   
+   found:
+       p->pid = allocpid();
+       p->state = USED;
+       memset(&p->context, 0, sizeof(p->context));
+       memset(p->trapframe, 0, PAGE_SIZE);
+       memset((void *)p->kstack, 0, PAGE_SIZE);
+       p->context.ra = (uint64)usertrapret;  // 第一次运行时的入口
+       p->context.sp = p->kstack + PAGE_SIZE;
+       return p;
+   }
+   ```
+
+   这里有个关键点：`p->context.ra = (uint64)usertrapret`
+
+   这意味着进程第一次被调度时，会从 `usertrapret` 函数开始执行，这个函数会完成从内核态返回用户态的操作。
+
+---
+
+### 5.6 进程切换的完整流程
+
+![image-20260104002603392](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\image-20260104002603392.png)
 
 ---
 
